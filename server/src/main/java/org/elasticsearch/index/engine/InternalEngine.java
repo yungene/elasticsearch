@@ -1059,8 +1059,11 @@ public class InternalEngine extends Engine {
     /** resolves the current version of the document, returning null if not found */
     private VersionValue resolveDocVersion(final Operation op, boolean loadSeqNo) throws IOException {
         assert incrementVersionLookup(); // used for asserting in tests
+
+        // JC: try to get this from the version map first
         VersionValue versionValue = getVersionFromMap(op.uid());
         if (versionValue == null) {
+            logger.trace("Doc version not found in version map, loading from index. id: {}", op.id());
             assert incrementIndexVersionLookup(); // used for asserting in tests
             final VersionsAndSeqNoResolver.DocIdAndVersion docIdAndVersion = performActionWithDirectoryReader(
                 SearcherScope.INTERNAL,
@@ -1222,6 +1225,7 @@ public class InternalEngine extends Engine {
                  *  if A arrives on the shard first we use addDocument since maxUnsafeAutoIdTimestamp is < 10. A` will then just be skipped
                  *  or calls updateDocument.
                  */
+                // JC: one path is here from bulk update to index to plan indexing
                 final IndexingStrategy plan = indexingStrategyForOperation(index);
                 reservedDocs = plan.reservedDocs;
 
@@ -1404,7 +1408,10 @@ public class InternalEngine extends Engine {
                 );
                 plan = IndexingStrategy.skipDueToVersionConflict(e, true, currentVersion, index.id());
             } else if (index.getIfSeqNo() != SequenceNumbers.UNASSIGNED_SEQ_NO
+                // JC: getIfSeqNo is 46, but versionValue is 40
                 && (versionValue.seqNo != index.getIfSeqNo() || versionValue.term != index.getIfPrimaryTerm())) {
+                    // JC: do we throw from here?
+                    logger.trace("Error, seq# or primary term mismatch detected on indexing. getIfSeqNo: {}", index.getIfSeqNo());
                     final VersionConflictEngineException e = new VersionConflictEngineException(
                         shardId,
                         index.id(),

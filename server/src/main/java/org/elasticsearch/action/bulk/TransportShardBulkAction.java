@@ -364,6 +364,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
      * @return {@code true} if request completed on this thread and the listener was invoked, {@code false} if the request triggered
      *                      a mapping update that will finish and invoke the listener on a different thread
      */
+    // JC: here is the update logic for bulk requests
     static boolean executeBulkItemRequest(
         BulkPrimaryExecutionContext context,
         UpdateHelper updateHelper,
@@ -379,6 +380,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
         final UpdateHelper.Result updateResult;
         if (opType == DocWriteRequest.OpType.UPDATE) {
             final UpdateRequest updateRequest = (UpdateRequest) context.getCurrent();
+            logger.trace("Starting update for {} ", updateRequest);
             try {
                 updateResult = updateHelper.prepare(
                     updateRequest,
@@ -396,6 +398,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
                 context.markAsCompleted(context.getExecutionResult());
                 return true;
             }
+            logger.trace("Finished update for {} ", updateRequest.id());
             if (updateResult.getResponseResult() == DocWriteResponse.Result.NOOP) {
                 context.markOperationAsNoOp(updateResult.action());
                 context.markAsCompleted(context.getExecutionResult());

@@ -1320,6 +1320,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         return innerGet(get, true, this::wrapSearcher);
     }
 
+    // JC: anotehr path
     private Engine.GetResult innerGet(Engine.Get get, boolean translogOnly, Function<Engine.Searcher, Engine.Searcher> searcherWrapper) {
         readAllowed();
         MappingLookup mappingLookup = mapperService.mappingLookup();
