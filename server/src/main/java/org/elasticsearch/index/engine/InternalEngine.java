@@ -1118,7 +1118,7 @@ public class InternalEngine extends Engine {
             }
             // The versionMap can still be unsafe at this point due to archive being unsafe
         }
-        logger.trace("Looking up version map for id: {}", id.utf8ToString());
+        logger.trace("Looking up version map for id: {}", id.toString());
         return versionMap.getUnderLock(id);
     }
 

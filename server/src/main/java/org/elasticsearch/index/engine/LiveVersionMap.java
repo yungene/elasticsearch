@@ -323,7 +323,7 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
 
         value = currentMaps.old.get(uid);
         if (value != null) {
-            logger.trace("Getting from old map for uid [{}]", uid.utf8ToString());
+            logger.trace("Getting from old map for uid [{}]", uid);
             return value;
         }
 
@@ -334,7 +334,7 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
             return value;
         }
 
-        logger.trace("Getting from archive for uid [{}]", uid.utf8ToString());
+        logger.trace("Getting from archive for uid [{}]", uid);
 
         return archive.get(uid);
     }
