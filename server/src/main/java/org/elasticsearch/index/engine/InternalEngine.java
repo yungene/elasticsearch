@@ -1091,7 +1091,7 @@ public class InternalEngine extends Engine {
             && (engineConfig.getThreadPool().relativeTimeInMillis() - ((DeleteVersionValue) versionValue).time) > getGcDeletesInMillis()) {
                 versionValue = null;
             }
-        logger.trace("Returning doc version for id: {}", op.id());
+        logger.trace("Returning doc version for id: {} {}", op.id(), versionValue);
         return versionValue;
     }
 

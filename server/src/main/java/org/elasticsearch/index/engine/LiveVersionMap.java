@@ -205,6 +205,7 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
          * builds a new map that invalidates the old map but maintains the current. This should be called in afterRefresh()
          */
         Maps invalidateOldMap(LiveVersionMapArchive archive) {
+            logger.trace("Called invalidateOldMap, archiving old map");
             archive.afterRefresh(old);
             return new Maps(current, VersionLookup.EMPTY, previousMapsNeededSafeAccess);
         }
@@ -286,6 +287,7 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
         // map. While reopen is running, any lookup will first
         // try this new map, then fallback to old, then to the
         // current searcher:
+        logger.trace("Building transition map before refresh");
         maps = maps.buildTransitionMap();
         assert (unsafeKeysMap = unsafeKeysMap.buildTransitionMap()) != null;
         // This is not 100% correct, since concurrent indexing ops can change these counters in between our execution of the previous
@@ -318,12 +320,13 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
         // First try to get the "live" value:
         VersionValue value = currentMaps.current.get(uid);
         if (value != null) {
+            logger.trace("Getting from current map for uid [{}] {}", uid, value);
             return value;
         }
 
         value = currentMaps.old.get(uid);
         if (value != null) {
-            logger.trace("Getting from old map for uid [{}]", uid);
+            logger.trace("Getting from old map for uid [{}] {}", uid, value);
             return value;
         }
 
@@ -380,6 +383,7 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
     void putIndexUnderLock(BytesRef uid, IndexVersionValue version) {
         assert assertKeyedLockHeldByCurrentThread(uid);
         assert uid.bytes.length == uid.length : "Oversized _uid! UID length: " + uid.length + ", bytes length: " + uid.bytes.length;
+        logger.trace("Putting into current map for uid [{}] {}", uid, version);
         maps.put(uid, version);
         removeTombstoneUnderLock(uid);
     }
