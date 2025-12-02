@@ -9,6 +9,8 @@
 
 package org.elasticsearch.index.engine;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.apache.lucene.search.ReferenceManager;
 import org.apache.lucene.util.Accountable;
 import org.apache.lucene.util.BytesRef;
@@ -24,6 +26,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** Maps _uid value to its version information. */
 public final class LiveVersionMap implements ReferenceManager.RefreshListener, Accountable {
+
+    private static final Logger logger = LogManager.getLogger(LiveVersionMap.class);
 
     private final KeyedLock<BytesRef> keyedLock = new KeyedLock<>();
 
@@ -319,6 +323,7 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
 
         value = currentMaps.old.get(uid);
         if (value != null) {
+            logger.trace("Getting from old map for uid [{}]", uid.utf8ToString());
             return value;
         }
 
@@ -328,6 +333,8 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
         if (value != null) {
             return value;
         }
+
+        logger.trace("Getting from archive for uid [{}]", uid.utf8ToString());
 
         return archive.get(uid);
     }
