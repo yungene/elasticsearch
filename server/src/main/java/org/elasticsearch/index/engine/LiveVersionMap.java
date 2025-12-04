@@ -355,6 +355,7 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
     }
 
     void enforceSafeAccess() {
+        logger.trace("Enforcing safe access mode");
         maps.needsSafeAccess = true;
     }
 
@@ -369,8 +370,10 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
         assert assertKeyedLockHeldByCurrentThread(uid);
         Maps maps = this.maps;
         if (maps.isSafeAccessMode()) {
+            logger.trace("Putting into current map for uid [{}] {}", uid, version);
             putIndexUnderLock(uid, version);
         } else {
+            logger.trace("Marking as unsafe for uid [{}] {}", uid, version);
             // Even though we don't store a record of the indexing operation (and mark as unsafe),
             // we should still remove any previous delete for this uuid (avoid accidental accesses).
             // Not this should not hurt performance because the tombstone is small (or empty) when unsafe is relevant.
@@ -383,7 +386,6 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
     void putIndexUnderLock(BytesRef uid, IndexVersionValue version) {
         assert assertKeyedLockHeldByCurrentThread(uid);
         assert uid.bytes.length == uid.length : "Oversized _uid! UID length: " + uid.length + ", bytes length: " + uid.bytes.length;
-        logger.trace("Putting into current map for uid [{}] {}", uid, version);
         maps.put(uid, version);
         removeTombstoneUnderLock(uid);
     }

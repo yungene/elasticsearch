@@ -969,9 +969,12 @@ public class InternalEngine extends Engine {
                 }
                 if (get.isReadFromTranslog()) {
                     if (versionValue.getLocation() != null) {
+                        // JC: we are executing this path, but within getFromTranslog we could still get from search I think if value
+                        // is missing in translog
                         try {
                             final Translog.Operation operation = translog.readOperation(versionValue.getLocation());
                             if (operation != null) {
+                                logger.trace("Get from translog uid: {}", get.uid());
                                 return getFromTranslog(get, (Translog.Index) operation, mappingLookup, documentParser, searcherWrapper);
                             }
                         } catch (IOException e) {
@@ -987,6 +990,7 @@ public class InternalEngine extends Engine {
                 refreshIfNeeded(REAL_TIME_GET_REFRESH_SOURCE, versionValue.seqNo);
             }
             if (getFromSearcherIfNotInTranslog) {
+                logger.trace("Get from searcher uid: {}", get.uid());
                 return getFromSearcher(get, acquireSearcher("realtime_get", SearcherScope.INTERNAL, searcherWrapper), false);
             }
             return null;
@@ -1114,6 +1118,8 @@ public class InternalEngine extends Engine {
                     logger.trace("Done with refresh, setting the value: {}", lastCommittedSegmentInfos);
                     lastUnsafeSegmentGenerationForGets.set(lastCommittedSegmentInfos.getGeneration());
                 }
+                // JC: why is it still not safe?
+                logger.trace("Enforce safe access after refresh for id: {}", id.toString());
                 versionMap.enforceSafeAccess();
             }
             // The versionMap can still be unsafe at this point due to archive being unsafe
@@ -1298,6 +1304,7 @@ public class InternalEngine extends Engine {
                     }
                     indexResult.setTranslogLocation(location);
                 }
+                // JC: we update the version map after we indexed into lucene and added to translog
                 if (plan.indexIntoLucene && indexResult.getResultType() == Result.Type.SUCCESS) {
                     final Translog.Location translogLocation = trackTranslogLocation.get() ? indexResult.getTranslogLocation() : null;
                     versionMap.maybePutIndexUnderLock(
@@ -1390,6 +1397,7 @@ public class InternalEngine extends Engine {
                 plan = IndexingStrategy.optimizedAppendOnly(1L, reservingDocs);
             }
         } else {
+            logger.trace("Enforcing safe access in planIndexingAsPrimary");
             versionMap.enforceSafeAccess();
             // resolves incoming version
             final VersionValue versionValue = resolveDocVersion(index, index.getIfSeqNo() != SequenceNumbers.UNASSIGNED_SEQ_NO);
