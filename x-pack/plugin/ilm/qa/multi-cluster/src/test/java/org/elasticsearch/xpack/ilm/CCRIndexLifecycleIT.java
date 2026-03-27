@@ -607,17 +607,119 @@ public class CCRIndexLifecycleIT extends ESCCRRestTestCase {
                 String backingIndexName = getDataStreamBackingIndexNames(leaderClient, "tsdb-index-cpu").get(0);
                 assertBusy(() -> assertOK(client().performRequest(new Request("HEAD", "/" + backingIndexName))));
 
+                long t0 = System.nanoTime();
                 assertBusy(() -> {
-                    Map<String, Object> indexExplanation = explainIndex(client(), backingIndexName);
+                    long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+                    Map<String, Object> followerExplanation = explainIndex(client(), backingIndexName);
+                    String followerStep = (String) followerExplanation.get("step");
+
+                    // #region agent log
+                    if (WaitUntilTimeSeriesEndTimePassesStep.NAME.equals(followerStep) == false) {
+                        Map<String, Object> leaderExplanation = explainIndex(leaderClient, backingIndexName);
+                        Object leaderIC = getIndexSetting(leaderClient, backingIndexName, "index.lifecycle.indexing_complete");
+                        Object followerIC = getIndexSetting(client(), backingIndexName, "index.lifecycle.indexing_complete");
+
+                        // H2/H3: Get leader settings version to compare with CCR's tracked version
+                        Object leaderSettingsVersion = null;
+                        try {
+                            Map<String, Object> leaderIdxMeta = toMap(
+                                leaderClient.performRequest(new Request("GET", "/" + backingIndexName)));
+                            @SuppressWarnings("unchecked")
+                            var idxData = (Map<String, Object>) leaderIdxMeta.get(backingIndexName);
+                            if (idxData != null) {
+                                @SuppressWarnings("unchecked")
+                                var settingsMap = (Map<String, Object>) idxData.get("settings");
+                                if (settingsMap != null) {
+                                    @SuppressWarnings("unchecked")
+                                    var idxSettings = (Map<String, Object>) settingsMap.get("index");
+                                    if (idxSettings != null) {
+                                        leaderSettingsVersion = idxSettings.get("version");
+                                    }
+                                }
+                            }
+                        } catch (Exception ignored) {}
+
+                        // H4: CCR shard follow task status (is it running? is settings_version advancing?)
+                        String ccrInfo;
+                        try {
+                            Map<?, ?> ccrStats = toMap(
+                                client().performRequest(new Request("GET", "/" + backingIndexName + "/_ccr/stats")));
+                            @SuppressWarnings("unchecked")
+                            var indices = (List<Map<String, Object>>) ccrStats.get("indices");
+                            if (indices != null && indices.isEmpty() == false) {
+                                @SuppressWarnings("unchecked")
+                                var shards = (List<Map<String, Object>>) indices.get(0).get("shards");
+                                if (shards != null && shards.isEmpty() == false) {
+                                    Map<String, Object> s = shards.get(0);
+                                    ccrInfo = Strings.format(
+                                        "follower_settings_version=%s, leader_gcp=%s, follower_gcp=%s, "
+                                            + "ops_read=%s, successful_read_requests=%s, "
+                                            + "time_since_last_read_millis=%s, read_exceptions=%s, "
+                                            + "fatal_exception=%s",
+                                        s.get("follower_settings_version"),
+                                        s.get("leader_global_checkpoint"),
+                                        s.get("follower_global_checkpoint"),
+                                        s.get("operations_read"),
+                                        s.get("successful_read_requests"),
+                                        s.get("time_since_last_read_millis"),
+                                        s.get("read_exceptions"),
+                                        s.get("fatal_exception")
+                                    );
+                                } else {
+                                    ccrInfo = "no shards in response";
+                                }
+                            } else {
+                                ccrInfo = "no indices in response";
+                            }
+                        } catch (Exception e) {
+                            ccrInfo = "error: " + e.getMessage();
+                        }
+
+                        // H5: Follower ILM step_info (the reason it's waiting)
+                        Object stepInfo = followerExplanation.get("step_info");
+
+                        String logLine = Strings.format(
+                            "[%dms] follower: step=%s action=%s phase=%s step_info=%s | "
+                                + "leader: step=%s action=%s phase=%s | "
+                                + "indexing_complete: leader=%s follower=%s | "
+                                + "leader_settings_version=%s | ccr: %s",
+                            elapsedMs,
+                            followerStep, followerExplanation.get("action"), followerExplanation.get("phase"), stepInfo,
+                            leaderExplanation.get("step"), leaderExplanation.get("action"), leaderExplanation.get("phase"),
+                            leaderIC, followerIC,
+                            leaderSettingsVersion,
+                            ccrInfo
+                        );
+                        LOGGER.info(logLine);
+
+                        try (java.io.FileWriter fw = new java.io.FileWriter(
+                                "/Users/eugenec/workplace/elasticsearch-serverless-ai-agents/.cursor/debug-4b7506.log", true)) {
+                            fw.write("{\"sessionId\":\"4b7506\",\"location\":\"CCRIndexLifecycleIT.java:assertBusy\","
+                                + "\"message\":\"retry-diagnostic\","
+                                + "\"hypothesisId\":\"H1-H5\","
+                                + "\"timestamp\":" + System.currentTimeMillis() + ","
+                                + "\"data\":{\"elapsedMs\":" + elapsedMs
+                                + ",\"followerStep\":\"" + followerStep + "\""
+                                + ",\"leaderStep\":\"" + leaderExplanation.get("step") + "\""
+                                + ",\"leaderIC\":\"" + leaderIC + "\""
+                                + ",\"followerIC\":\"" + followerIC + "\""
+                                + ",\"leaderSettingsVersion\":\"" + leaderSettingsVersion + "\""
+                                + ",\"ccrInfo\":\"" + ccrInfo.replace("\"", "'") + "\""
+                                + ",\"stepInfo\":\"" + (stepInfo != null ? stepInfo.toString().replace("\"", "'") : "null") + "\""
+                                + "}}\n");
+                        } catch (Exception ignored) {}
+                    }
+                    // #endregion
+
                     assertThat(
                         "index must wait in the " + WaitUntilTimeSeriesEndTimePassesStep.NAME + " until its end time lapses",
-                        indexExplanation.get("step"),
+                        followerStep,
                         is(WaitUntilTimeSeriesEndTimePassesStep.NAME)
                     );
 
-                    assertThat(indexExplanation.get("step_info"), is(notNullValue()));
+                    assertThat(followerExplanation.get("step_info"), is(notNullValue()));
                     assertThat(
-                        (String) ((Map<String, Object>) indexExplanation.get("step_info")).get("message"),
+                        (String) ((Map<String, Object>) followerExplanation.get("step_info")).get("message"),
                         containsString("Waiting until the index's time series end time lapses")
                     );
                 }, 30, TimeUnit.SECONDS);
@@ -651,6 +753,100 @@ public class CCRIndexLifecycleIT extends ESCCRRestTestCase {
                         is(WaitUntilTimeSeriesEndTimePassesStep.NAME)
                     );
                 }, 30, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    /**
+     * Reproduces the race condition from <a href="https://github.com/elastic/elasticsearch/issues/132050">#132050</a>.
+     *
+     * The original test assumes that by the time the follower index exists and ILM evaluates it,
+     * the leader has already completed rollover and set {@code index.lifecycle.indexing_complete=true},
+     * and CCR has synced that setting to the follower. This test proves that if the leader hasn't
+     * completed the rollover chain yet, the follower gets stuck at {@code wait-for-indexing-complete}
+     * instead of advancing to {@code check-ts-end-time-passed}.
+     */
+    public void testTsdbRaceConditionReproduction() throws Exception {
+        String indexPattern = "tsdb-race-";
+        String dataStream = "tsdb-race-cpu";
+        String policyName = "tsdb-race-policy";
+
+        if ("leader".equals(targetCluster)) {
+            putILMPolicy(policyName, null, 1, null);
+            Request templateRequest = new Request("PUT", "/_index_template/tsdb_race_template");
+            templateRequest.setJsonEntity(Strings.format(TSDB_INDEX_TEMPLATE, indexPattern, policyName));
+            assertOK(client().performRequest(templateRequest));
+        } else if ("follow".equals(targetCluster)) {
+            putUnfollowOnlyPolicy(client(), policyName);
+
+            try (RestClient leaderClient = buildLeaderClient()) {
+                // Stop ILM on the leader BEFORE indexing, so rollover never executes
+                // and index.lifecycle.indexing_complete is never set on the leader.
+                assertOK(leaderClient.performRequest(new Request("POST", "/_ilm/stop")));
+                assertBusy(() -> {
+                    Response statusResp = leaderClient.performRequest(new Request("GET", "/_ilm/status"));
+                    String status = EntityUtils.toString(statusResp.getEntity());
+                    assertThat(status, containsString("STOPPED"));
+                });
+
+                // Now set up auto-follow on the follower
+                Request createAutoFollowRequest = new Request("PUT", "/_ccr/auto_follow/tsdb_race_auto_follow_pattern");
+                createAutoFollowRequest.setJsonEntity("""
+                    {
+                        "leader_index_patterns": [ "tsdb-race-*" ],
+                        "remote_cluster": "leader_cluster",
+                        "read_poll_timeout": "1000ms",
+                        "follow_index_pattern": "{{leader_index}}"
+                    }""");
+                assertOK(client().performRequest(createAutoFollowRequest));
+
+                // Index a document on the leader. This creates the data stream + backing index,
+                // but ILM is stopped so no rollover happens and indexing_complete is never set.
+                String now = DateFormatter.forPattern(FormatNames.STRICT_DATE_OPTIONAL_TIME.getName()).format(Instant.now());
+                index(leaderClient, dataStream, "", "@timestamp", now, "volume", 11.0, "metricset", randomAlphaOfLength(5));
+
+                String backingIndexName = getDataStreamBackingIndexNames(leaderClient, dataStream).get(0);
+
+                // Wait for auto-follow to create the follower index
+                assertBusy(() -> assertOK(client().performRequest(new Request("HEAD", "/" + backingIndexName))));
+
+                // The follower index now exists with CCR metadata, and the follower's ILM
+                // (with the unfollow-only policy) is running. Since indexing_complete was never
+                // set on the leader (ILM is stopped there), the follower should be stuck at
+                // wait-for-indexing-complete — NOT at check-ts-end-time-passed.
+                assertBusy(() -> {
+                    assertILMPolicy(client(), backingIndexName, policyName, "hot", "unfollow", "wait-for-indexing-complete");
+                }, 30, TimeUnit.SECONDS);
+
+                // Now restart leader ILM so rollover completes and indexing_complete gets set
+                assertOK(leaderClient.performRequest(new Request("POST", "/_ilm/start")));
+
+                // Wait for the leader to set indexing_complete
+                assertBusy(() -> {
+                    assertThat(
+                        getIndexSetting(leaderClient, backingIndexName, "index.lifecycle.indexing_complete"),
+                        equalTo("true")
+                    );
+                }, 60, TimeUnit.SECONDS);
+
+                // Wait for CCR to replicate the setting to the follower
+                assertBusy(() -> {
+                    assertThat(
+                        getIndexSetting(client(), backingIndexName, "index.lifecycle.indexing_complete"),
+                        equalTo("true")
+                    );
+                }, 60, TimeUnit.SECONDS);
+
+                // Now the follower should advance past wait-for-indexing-complete to
+                // check-ts-end-time-passed (since the TSDB end time hasn't passed yet)
+                assertBusy(() -> {
+                    Map<String, Object> indexExplanation = explainIndex(client(), backingIndexName);
+                    assertThat(
+                        "After indexing_complete is set and replicated, follower should advance to check-ts-end-time-passed",
+                        indexExplanation.get("step"),
+                        is(WaitUntilTimeSeriesEndTimePassesStep.NAME)
+                    );
+                }, 60, TimeUnit.SECONDS);
             }
         }
     }
