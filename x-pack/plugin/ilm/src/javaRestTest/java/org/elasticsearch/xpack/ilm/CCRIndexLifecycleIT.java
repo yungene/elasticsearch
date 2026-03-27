@@ -112,6 +112,10 @@ public class CCRIndexLifecycleIT extends AbstractCCRRestTestCase {
         .setting("xpack.security.enabled", "false")
         .setting("xpack.license.self_generated.type", "trial")
         .setting("indices.lifecycle.poll_interval", "1000ms")
+        .setting("logger.org.elasticsearch.action.admin.indices.create.AutoCreateAction", "DEBUG")
+        .setting("logger.org.elasticsearch.cluster.metadata.MetadataCreateDataStreamService", "DEBUG")
+        .setting("logger.org.elasticsearch.cluster.metadata.MetadataCreateIndexService", "DEBUG")
+        .setting("logger.org.elasticsearch.cluster.metadata.MetadataIndexTemplateService", "DEBUG")
         .build();
 
     public static ElasticsearchCluster followerCluster = ElasticsearchCluster.local()
@@ -126,6 +130,7 @@ public class CCRIndexLifecycleIT extends AbstractCCRRestTestCase {
         .setting("xpack.license.self_generated.type", "trial")
         .setting("indices.lifecycle.poll_interval", "1000ms")
         .setting("cluster.remote.leader_cluster.seeds", () -> "\"" + leaderCluster.getTransportEndpoints() + "\"")
+        .setting("logger.org.elasticsearch.xpack.ccr.action.AutoFollowCoordinator", "DEBUG")
         .build();
 
     @ClassRule
@@ -652,10 +657,8 @@ public class CCRIndexLifecycleIT extends AbstractCCRRestTestCase {
             Request templateRequest = new Request("PUT", "/_index_template/tsdb_template");
             templateRequest.setJsonEntity(Strings.format(TSDB_INDEX_TEMPLATE, indexPattern, policyName));
             assertOK(client().performRequest(templateRequest));
+            LOGGER.info("LEADER setup complete: created ILM policy [{}] and index template [tsdb_template]", policyName);
         } else if (targetCluster == TargetCluster.FOLLOWER) {
-            // Use unfollow-only policy for follower cluster instead of regular ILM policy
-            // Follower clusters should not have their own rollover actions as they are meant
-            // to follow the rollover behavior of the leader index, not initiate their own rollovers
             putUnfollowOnlyPolicy(client(), policyName);
 
             Request createAutoFollowRequest = new Request("PUT", "/_ccr/auto_follow/tsdb_index_auto_follow_pattern");
@@ -671,18 +674,42 @@ public class CCRIndexLifecycleIT extends AbstractCCRRestTestCase {
             try (RestClient leaderClient = buildLeaderClient()) {
                 String now = DateFormatter.forPattern(FormatNames.STRICT_DATE_OPTIONAL_TIME.getName()).format(Instant.now());
 
-                // Index a document on the leader index, this should trigger an ILM rollover.
-                // This will ensure that 'index.lifecycle.indexing_complete' is set.
+                // Log leader state before indexing to diagnose intermittent failures (#137565)
+                logLeaderState(leaderClient, "pre-index");
+
                 index(leaderClient, dataStream, "", "@timestamp", now, "volume", 11.0, "metricset", randomAlphaOfLength(5));
 
-                String backingIndexName = getDataStreamBackingIndexNames(leaderClient, "tsdb-index-cpu").get(0);
+                // Log leader state after indexing
+                logLeaderState(leaderClient, "post-index");
+
+                List<String> backingIndices;
+                try {
+                    backingIndices = getDataStreamBackingIndexNames(leaderClient, "tsdb-index-cpu");
+                } catch (AssertionError | Exception e) {
+                    // On failure, dump exhaustive leader state for diagnosis
+                    logLeaderStateOnFailure(leaderClient, e);
+                    throw e;
+                }
+
+                String backingIndexName = backingIndices.get(0);
+
                 assertBusy(() -> assertOK(client().performRequest(new Request("HEAD", "/" + backingIndexName))));
 
                 assertBusy(() -> {
                     Map<String, Object> indexExplanation = explainIndex(client(), backingIndexName);
+                    String actualStep = (String) indexExplanation.get("step");
+                    if (WaitUntilTimeSeriesEndTimePassesStep.NAME.equals(actualStep) == false) {
+                        LOGGER.warn(
+                            "Follower index [{}] is in step [{}] instead of [{}], full ILM explain: {}",
+                            backingIndexName,
+                            actualStep,
+                            WaitUntilTimeSeriesEndTimePassesStep.NAME,
+                            indexExplanation
+                        );
+                    }
                     assertThat(
                         "index must wait in the " + WaitUntilTimeSeriesEndTimePassesStep.NAME + " until its end time lapses",
-                        indexExplanation.get("step"),
+                        actualStep,
                         is(WaitUntilTimeSeriesEndTimePassesStep.NAME)
                     );
 
@@ -1058,5 +1085,65 @@ public class CCRIndexLifecycleIT extends AbstractCCRRestTestCase {
         Response response = client.performRequest(countRequest);
         Map<String, Object> result = entityAsMap(response);
         return (int) result.get("count");
+    }
+
+    private static void logLeaderState(RestClient leaderClient, String phase) {
+        try {
+            int templateStatus;
+            try {
+                templateStatus = leaderClient.performRequest(new Request("GET", "/_index_template/tsdb_template"))
+                    .getStatusLine().getStatusCode();
+            } catch (ResponseException re) {
+                templateStatus = re.getResponse().getStatusLine().getStatusCode();
+            }
+
+            int dsStatus;
+            String dsBody = "";
+            try {
+                Response dsResp = leaderClient.performRequest(new Request("GET", "/_data_stream/tsdb-index-cpu"));
+                dsStatus = dsResp.getStatusLine().getStatusCode();
+                dsBody = EntityUtils.toString(dsResp.getEntity());
+            } catch (ResponseException re) {
+                dsStatus = re.getResponse().getStatusLine().getStatusCode();
+            }
+
+            String catIndices = EntityUtils.toString(
+                leaderClient.performRequest(new Request("GET", "/_cat/indices/tsdb-index*?v&h=index,status,health")).getEntity()
+            ).trim();
+
+            LOGGER.info(
+                "[{}] leader state: tsdb_template={}, data_stream={}, dsBody=[{}], cat_indices=[{}]",
+                phase,
+                templateStatus,
+                dsStatus,
+                dsBody,
+                catIndices
+            );
+        } catch (Exception e) {
+            LOGGER.warn("[{}] failed to log leader state", phase, e);
+        }
+    }
+
+    private static void logLeaderStateOnFailure(RestClient leaderClient, Throwable failure) {
+        try {
+            String allDataStreams = EntityUtils.toString(
+                leaderClient.performRequest(new Request("GET", "/_data_stream/*")).getEntity()
+            );
+            String catAllIndices = EntityUtils.toString(
+                leaderClient.performRequest(new Request("GET", "/_cat/indices?v")).getEntity()
+            ).trim();
+            String allTemplates = EntityUtils.toString(
+                leaderClient.performRequest(new Request("GET", "/_index_template")).getEntity()
+            );
+            LOGGER.error(
+                "getDataStreamBackingIndexNames failed: {}\nAll data streams: {}\nAll indices:\n{}\nAll templates: {}",
+                failure.getMessage(),
+                allDataStreams,
+                catAllIndices,
+                allTemplates
+            );
+        } catch (Exception inner) {
+            LOGGER.error("getDataStreamBackingIndexNames failed and could not log state: {}", failure.getMessage(), inner);
+        }
     }
 }
