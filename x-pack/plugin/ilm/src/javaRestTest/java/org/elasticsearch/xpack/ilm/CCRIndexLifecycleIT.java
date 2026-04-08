@@ -116,6 +116,9 @@ public class CCRIndexLifecycleIT extends AbstractCCRRestTestCase {
         .setting("logger.org.elasticsearch.cluster.metadata.MetadataCreateDataStreamService", "DEBUG")
         .setting("logger.org.elasticsearch.cluster.metadata.MetadataCreateIndexService", "DEBUG")
         .setting("logger.org.elasticsearch.cluster.metadata.MetadataIndexTemplateService", "DEBUG")
+        .setting("logger.org.elasticsearch.xpack.core.ilm", "TRACE")
+        .setting("logger.org.elasticsearch.xpack.ilm", "TRACE")
+        .setting("logger.org.elasticsearch.xpack.ilm.history.ILMHistoryStore", "INFO")
         .build();
 
     public static ElasticsearchCluster followerCluster = ElasticsearchCluster.local()
@@ -131,6 +134,11 @@ public class CCRIndexLifecycleIT extends AbstractCCRRestTestCase {
         .setting("indices.lifecycle.poll_interval", "1000ms")
         .setting("cluster.remote.leader_cluster.seeds", () -> "\"" + leaderCluster.getTransportEndpoints() + "\"")
         .setting("logger.org.elasticsearch.xpack.ccr.action.AutoFollowCoordinator", "DEBUG")
+        .setting("logger.org.elasticsearch.xpack.ccr.action.ShardFollowNodeTask", "TRACE")
+        .setting("logger.org.elasticsearch.xpack.ccr.action.ShardFollowTasksExecutor", "DEBUG")
+        .setting("logger.org.elasticsearch.xpack.core.ilm", "TRACE")
+        .setting("logger.org.elasticsearch.xpack.ilm", "TRACE")
+        .setting("logger.org.elasticsearch.xpack.ilm.history.ILMHistoryStore", "INFO")
         .build();
 
     @ClassRule
