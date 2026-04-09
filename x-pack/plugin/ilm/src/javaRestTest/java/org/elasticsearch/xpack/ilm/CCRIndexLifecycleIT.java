@@ -136,6 +136,15 @@ public class CCRIndexLifecycleIT extends AbstractCCRRestTestCase {
         .setting("logger.org.elasticsearch.xpack.ccr.action.AutoFollowCoordinator", "DEBUG")
         .setting("logger.org.elasticsearch.xpack.ccr.action.ShardFollowNodeTask", "TRACE")
         .setting("logger.org.elasticsearch.xpack.ccr.action.ShardFollowTasksExecutor", "DEBUG")
+        .setting("logger.org.elasticsearch.xpack.ccr.action.TransportPutFollowAction", "DEBUG")
+        .setting("logger.org.elasticsearch.xpack.ccr.action.TransportResumeFollowAction", "DEBUG")
+        .setting("logger.org.elasticsearch.persistent.PersistentTasksService", "DEBUG")
+        .setting("logger.org.elasticsearch.persistent.PersistentTasksClusterService", "DEBUG")
+        .setting("logger.org.elasticsearch.persistent.PersistentTasksNodeService", "TRACE")
+        .setting(
+            "logger.org.elasticsearch.action.admin.cluster.snapshots.restore.RestoreClusterStateListener",
+            "DEBUG"
+        )
         .setting("logger.org.elasticsearch.xpack.core.ilm", "TRACE")
         .setting("logger.org.elasticsearch.xpack.ilm", "TRACE")
         .setting("logger.org.elasticsearch.xpack.ilm.history.ILMHistoryStore", "INFO")

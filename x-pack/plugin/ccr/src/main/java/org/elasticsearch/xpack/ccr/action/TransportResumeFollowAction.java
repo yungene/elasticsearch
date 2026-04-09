@@ -7,6 +7,8 @@
 
 package org.elasticsearch.xpack.ccr.action;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.master.AcknowledgedResponse;
@@ -68,6 +70,8 @@ import java.util.concurrent.Executor;
 import static org.elasticsearch.xpack.ccr.Ccr.CCR_THREAD_POOL_NAME;
 
 public class TransportResumeFollowAction extends AcknowledgedTransportMasterNodeAction<ResumeFollowAction.Request> {
+
+    private static final Logger logger = LogManager.getLogger(TransportResumeFollowAction.class);
 
     static final ByteSizeValue DEFAULT_MAX_READ_REQUEST_SIZE = ByteSizeValue.of(32, ByteSizeUnit.MB);
     static final ByteSizeValue DEFAULT_MAX_WRITE_REQUEST_SIZE = ByteSizeValue.ofBytes(Long.MAX_VALUE);
@@ -149,15 +153,25 @@ public class TransportResumeFollowAction extends AcknowledgedTransportMasterNode
             RemoteClusterService.DisconnectedStrategy.RECONNECT_IF_DISCONNECTED
         );
         final String leaderIndex = ccrMetadata.get(Ccr.CCR_CUSTOM_METADATA_LEADER_INDEX_NAME_KEY);
+        logger.debug(
+            "masterOperation: resumeFollow for follower=[{}], leaderCluster=[{}], leaderIndex=[{}]",
+            request.getFollowerIndex(),
+            leaderCluster,
+            leaderIndex
+        );
         ccrLicenseChecker.checkRemoteClusterLicenseAndFetchLeaderIndexMetadataAndHistoryUUIDs(
             client,
             leaderCluster,
             leaderIndex,
-            listener::onFailure,
+            e -> {
+                logger.warn("masterOperation: license/metadata check failed for follower=[{}]", request.getFollowerIndex());
+                listener.onFailure(e);
+            },
             (leaderHistoryUUID, leaderIndexMetadata) -> {
                 try {
                     start(request, leaderCluster, leaderIndexMetadata.v1(), followerIndexMetadata, leaderHistoryUUID, listener);
                 } catch (final IOException e) {
+                    logger.warn("masterOperation: start failed for follower=[{}]", request.getFollowerIndex());
                     listener.onFailure(e);
                 }
             }
@@ -183,6 +197,14 @@ public class TransportResumeFollowAction extends AcknowledgedTransportMasterNode
         ActionListener<AcknowledgedResponse> listener
     ) throws IOException {
 
+        logger.debug(
+            "start: follower=[{}], leader=[{}], cluster=[{}], numShards={}",
+            followIndexMetadata.getIndex().getName(),
+            leaderIndexMetadata.getIndex().getName(),
+            clusterNameAlias,
+            followIndexMetadata.getNumberOfShards()
+        );
+
         MapperService mapperService = followIndexMetadata != null
             ? indicesService.createIndexMapperServiceForValidation(followIndexMetadata)
             : null;
@@ -203,6 +225,12 @@ public class TransportResumeFollowAction extends AcknowledgedTransportMasterNode
                 leaderIndexMetadata,
                 followIndexMetadata,
                 filteredHeaders
+            );
+            logger.debug(
+                "start: sending persistent task start request for follower=[{}], shard=[{}], taskId=[{}]",
+                followIndexMetadata.getIndex().getName(),
+                shardId,
+                taskId
             );
             persistentTasksService.sendStartRequest(
                 taskId,

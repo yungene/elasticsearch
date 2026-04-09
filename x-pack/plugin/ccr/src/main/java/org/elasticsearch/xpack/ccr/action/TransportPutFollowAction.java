@@ -135,6 +135,12 @@ public final class TransportPutFollowAction extends TransportMasterNodeAction<Pu
         final PutFollowAction.Request request,
         final ActionListener<PutFollowAction.Response> listener
     ) {
+        logger.debug(
+            "createFollowerIndex: leader=[{}], follower=[{}], dataStream=[{}]",
+            request.getLeaderIndex(),
+            request.getFollowerIndex(),
+            remoteDataStream != null ? remoteDataStream.getName() : "null"
+        );
         if (leaderIndexMetadata == null) {
             listener.onFailure(new IllegalArgumentException("leader index [" + request.getLeaderIndex() + "] does not exist"));
             return;
@@ -276,18 +282,30 @@ public final class TransportPutFollowAction extends TransportMasterNodeAction<Pu
             listener = originalListener;
         }
 
+        logger.debug("afterRestoreStarted: waiting for restore of follower [{}] to complete", request.getFollowerIndex());
         RestoreClusterStateListener.createAndRegisterListener(
             clusterService,
             response,
             listener.delegateFailure((delegatedListener, restoreSnapshotResponse) -> {
                 RestoreInfo restoreInfo = restoreSnapshotResponse.getRestoreInfo();
                 if (restoreInfo == null) {
-                    // If restoreInfo is null then it is possible there was a master failure during the
-                    // restore.
+                    logger.debug("afterRestoreStarted: restoreInfo is null for follower [{}], possible master failure", request
+                        .getFollowerIndex());
                     delegatedListener.onResponse(new PutFollowAction.Response(true, false, false));
                 } else if (restoreInfo.failedShards() == 0) {
+                    logger.debug(
+                        "afterRestoreStarted: restore of follower [{}] completed successfully (shards={}), initiating following",
+                        request.getFollowerIndex(),
+                        restoreInfo.totalShards()
+                    );
                     initiateFollowing(clientWithHeaders, request, delegatedListener);
                 } else {
+                    logger.warn(
+                        "afterRestoreStarted: restore of follower [{}] had {} failed shards out of {}, NOT initiating following",
+                        request.getFollowerIndex(),
+                        restoreInfo.failedShards(),
+                        restoreInfo.totalShards()
+                    );
                     assert restoreInfo.failedShards() > 0 : "Should have failed shards";
                     delegatedListener.onResponse(new PutFollowAction.Response(true, false, false));
                 }
@@ -302,6 +320,7 @@ public final class TransportPutFollowAction extends TransportMasterNodeAction<Pu
         final ActionListener<PutFollowAction.Response> listener
     ) {
         assert request.waitForActiveShards() != ActiveShardCount.DEFAULT : "PutFollowAction does not support DEFAULT.";
+        logger.debug("initiateFollowing: sending ResumeFollowAction for follower [{}]", request.getFollowerIndex());
         FollowParameters parameters = request.getParameters();
         ResumeFollowAction.Request resumeFollowRequest = new ResumeFollowAction.Request(request.masterNodeTimeout());
         resumeFollowRequest.setFollowerIndex(request.getFollowerIndex());

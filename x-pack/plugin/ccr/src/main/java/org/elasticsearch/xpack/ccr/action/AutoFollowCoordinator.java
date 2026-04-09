@@ -753,6 +753,9 @@ public class AutoFollowCoordinator extends AbstractLifecycleComponent implements
         ) {
             PutFollowAction.Request request = generateRequest(remoteClusterString, indexToFollow, indexAbstraction, pattern);
 
+            LOGGER.debug("followLeaderIndex: about to createAndFollow leader=[{}] as follower=[{}]", indexToFollow, request
+                .getFollowerIndex());
+
             // Execute if the create and follow api call succeeds:
             Runnable successHandler = () -> {
                 LOGGER.info("auto followed leader index [{}] as follow index [{}]", indexToFollow, request.getFollowerIndex());
@@ -763,7 +766,15 @@ public class AutoFollowCoordinator extends AbstractLifecycleComponent implements
                 // The coordinator always runs on the elected master node, so we can update cluster state here:
                 updateAutoFollowMetadata(function, onResult);
             };
-            createAndFollow(headers, request, successHandler, onResult);
+            Consumer<Exception> failureHandler = e -> {
+                LOGGER.warn(
+                    () -> "followLeaderIndex: createAndFollow FAILED for leader=[" + indexToFollow + "] as follower=["
+                        + request.getFollowerIndex() + "]",
+                    e
+                );
+                onResult.accept(e);
+            };
+            createAndFollow(headers, request, successHandler, failureHandler);
         }
 
         private void finalise(int slot, AutoFollowResult result, final Thread thread) {
