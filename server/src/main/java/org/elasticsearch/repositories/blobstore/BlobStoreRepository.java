@@ -800,6 +800,12 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
         if (updatedSettings.equals(previousSettings) == false) {
             snapshotRateLimiter = getSnapshotRateLimiter();
             restoreRateLimiter = getRestoreRateLimiter();
+            logger.debug(
+                "repository [{}] settings updated, snapshotRateLimiter=[{}], restoreRateLimiter=[{}]",
+                metadata.name(),
+                snapshotRateLimiter,
+                restoreRateLimiter
+            );
         }
 
         uncleanStart = uncleanStart && metadata.generation() != metadata.pendingGeneration();
@@ -3694,7 +3700,15 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
 
             // filesToSnapshot will be emptied while snapshotting the file. We make a copy here for cleanup purpose in case of failure.
             final AtomicReference<List<FileInfo>> fileToCleanUp = new AtomicReference<>(List.copyOf(filesToSnapshot));
+            final int totalFilesToUpload = filesToSnapshot.size();
             final ActionListener<Collection<Void>> allFilesUploadedListener = ActionListener.assertOnce(ActionListener.wrap(ignore -> {
+                logger.debug(
+                    "[{}][{}] all [{}] files uploaded, elapsed [{}ms]",
+                    shardId,
+                    snapshotId,
+                    totalFilesToUpload,
+                    threadPool.absoluteTimeInMillis() - startTime
+                );
                 snapshotStatus.updateStatusDescription("all files uploaded: finalizing");
                 final IndexShardSnapshotStatus.Copy lastSnapshotStatus = snapshotStatus.moveToFinalize();
 
@@ -3754,6 +3768,13 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
                 allFilesUploadedListener.onResponse(Collections.emptyList());
                 return;
             }
+            logger.debug(
+                "[{}][{}] uploading [{}] files, incrementalSize=[{}]",
+                shardId,
+                snapshotId,
+                filesToSnapshot.size(),
+                indexIncrementalSize
+            );
             snapshotFiles(context, filesToSnapshot, allFilesUploadedListener);
         } catch (Exception e) {
             context.onFailure(e);
@@ -4366,6 +4387,18 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
                 final long uploadTimeInMillis = threadPool.rawRelativeTimeInMillis() - startMillis;
                 blobStoreSnapshotMetrics.incrementCountersForPartUpload(partBytes, uploadTimeInMillis);
                 blobStoreSnapshotMetrics.incrementUploadReadTime(TimeUnit.NANOSECONDS.toMillis(totalTimeSpendReadingInNanos.longValue()));
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                        "[{}] [{}][{}] uploaded part [{}] size=[{}b] took=[{}ms] rateLimiter=[{}]",
+                        metadata.name(),
+                        shardId,
+                        snapshotId,
+                        partName,
+                        partBytes,
+                        uploadTimeInMillis,
+                        snapshotRateLimiter
+                    );
+                }
                 logger.trace(
                     "[{}] Writing [{}] of size [{}b] to [{}] took [{}/{}ms]",
                     metadata.name(),

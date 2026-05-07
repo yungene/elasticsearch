@@ -26,6 +26,7 @@ import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.plugins.PluginsService;
 import org.elasticsearch.repositories.blobstore.BlobStoreRepository;
 import org.elasticsearch.snapshots.AbstractSnapshotIntegTestCase;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.snapshots.SnapshotException;
 import org.elasticsearch.snapshots.SnapshotState;
 import org.elasticsearch.telemetry.InstrumentType;
@@ -207,6 +208,12 @@ public class SnapshotMetricsIT extends AbstractSnapshotIntegTestCase {
         assertMetricsHaveAttributes(InstrumentType.LONG_COUNTER, SnapshotMetrics.SNAPSHOT_BLOBS_UPLOADED, expectedAttrs);
     }
 
+    @TestLogging(
+        reason = "investigating throttle removal timing - see #148XXX",
+        value = "org.elasticsearch.repositories.blobstore.BlobStoreRepository:DEBUG,"
+            + "org.elasticsearch.snapshots.SnapshotsService:DEBUG,"
+            + "org.elasticsearch.repositories.RepositoriesService:DEBUG"
+    )
     public void testThrottlingMetrics() throws Exception {
         final String indexName = randomIdentifier();
         final int numShards = randomIntBetween(1, 10);
@@ -252,6 +259,16 @@ public class SnapshotMetricsIT extends AbstractSnapshotIntegTestCase {
             false
         );
         final long snap_ts2 = System.currentTimeMillis();
+
+        // Log repository settings on the master node to verify settings were applied
+        {
+            BlobStoreRepository repo = (BlobStoreRepository) internalCluster().getCurrentMasterNodeInstance(RepositoriesService.class)
+                .repository(repositoryName);
+            logger.info(
+                "after throttle removal on master: max_snapshot_bytes_per_sec=[{}]",
+                repo.getMetadata().settings().get(BlobStoreRepository.MAX_SNAPSHOT_BYTES_PER_SEC.getKey())
+            );
+        }
 
         // wait for the snapshot to finish
         safeGet(snapshotFuture);
@@ -300,6 +317,17 @@ public class SnapshotMetricsIT extends AbstractSnapshotIntegTestCase {
             repositorySettings.put(BlobStoreRepository.MAX_RESTORE_BYTES_PER_SEC.getKey(), ByteSizeValue.ZERO),
             false
         );
+
+        // Log repository settings on the master node to verify settings were applied
+        {
+            BlobStoreRepository repo = (BlobStoreRepository) internalCluster().getCurrentMasterNodeInstance(RepositoriesService.class)
+                .repository(repositoryName);
+            logger.info(
+                "after restore throttle removal on master: max_restore_bytes_per_sec=[{}]",
+                repo.getMetadata().settings().get(BlobStoreRepository.MAX_RESTORE_BYTES_PER_SEC.getKey())
+            );
+        }
+
         safeGet(restoreFuture);
         final long restore_ts3 = System.currentTimeMillis();
 
