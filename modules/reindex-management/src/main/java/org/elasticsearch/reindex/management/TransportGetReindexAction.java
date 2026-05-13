@@ -50,6 +50,12 @@ public class TransportGetReindexAction extends HandledTransportAction<GetReindex
     @Override
     protected void doExecute(Task thisTask, GetReindexRequest request, ActionListener<GetReindexResponse> listener) {
         final TaskId taskId = request.getTaskId();
+        logger.debug(
+            "doExecute: GET reindex [{}], waitForCompletion [{}], timeout [{}]",
+            taskId,
+            request.getWaitForCompletion(),
+            request.getTimeout()
+        );
 
         // Probe without waiting or following relocations, just to validate this is a reindex parent task
         final GetTaskRequest probeRequest = new GetTaskRequest().setTaskId(taskId).setWaitForCompletion(false).setFollowRelocations(false);
@@ -67,11 +73,27 @@ public class TransportGetReindexAction extends HandledTransportAction<GetReindex
                 return;
             }
 
+            logger.debug(
+                "doExecute: probe succeeded for [{}], completed [{}], issuing fetch with waitForCompletion [{}], timeout [{}]",
+                taskId,
+                probeResult.isCompleted(),
+                request.getWaitForCompletion(),
+                request.getTimeout()
+            );
+
             // Fetch the real result with relocation following and optional wait
             final GetTaskRequest fetchRequest = new GetTaskRequest().setTaskId(taskId)
                 .setWaitForCompletion(request.getWaitForCompletion())
                 .setTimeout(request.getTimeout());
-            getTask(fetchRequest, taskId, l.delegateFailureAndWrap((l2, result) -> l2.onResponse(new GetReindexResponse(result))));
+            getTask(fetchRequest, taskId, l.delegateFailureAndWrap((l2, result) -> {
+                logger.debug(
+                    "doExecute: fetch completed for [{}], completed [{}], error [{}]",
+                    taskId,
+                    result.isCompleted(),
+                    result.getErrorAsMap()
+                );
+                l2.onResponse(new GetReindexResponse(result));
+            }));
         }));
     }
 

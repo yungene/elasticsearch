@@ -65,11 +65,24 @@ public class TransportRethrottleAction extends TransportTasksAction<BulkByScroll
 
     @Override
     protected void doExecute(Task task, RethrottleRequest request, ActionListener<ListTasksResponse> listener) {
+        logger.debug(
+            "doExecute: rethrottle target [{}], followRelocations [{}], requestsPerSecond [{}]",
+            request.getTargetTaskId(),
+            request.followRelocations(),
+            request.getRequestsPerSecond()
+        );
         super.doExecute(task, request, listener.delegateFailureAndWrap((l, response) -> {
             final ListTasksResponse responseWithOriginalIdentityTasks = new ListTasksResponse(
                 response.getTasks().stream().map(TaskInfo::withOriginalRelocationIdentity).toList(),
                 response.getTaskFailures(),
                 response.getNodeFailures()
+            );
+            logger.debug(
+                "doExecute: rethrottle for [{}] got [{}] tasks, [{}] task failures, [{}] node failures",
+                request.getTargetTaskId(),
+                responseWithOriginalIdentityTasks.getTasks().size(),
+                responseWithOriginalIdentityTasks.getTaskFailures().size(),
+                responseWithOriginalIdentityTasks.getNodeFailures().size()
             );
             // follow relocation chain even if there is a node failure, node might be gone, but the task is still running elsewhere.
             if (request.followRelocations()
@@ -101,15 +114,26 @@ public class TransportRethrottleAction extends TransportTasksAction<BulkByScroll
         final ActionListener<ListTasksResponse> listener
     ) {
         assert request.followRelocations();
+        logger.debug("followRelocationAndRethrottle: looking up task [{}] via GET _tasks to find relocated task", request.getTargetTaskId());
         final GetTaskRequest getTask = new GetTaskRequest();
         getTask.setTaskId(request.getTargetTaskId());
 
         tasksClient.admin().cluster().getTask(getTask, ActionListener.wrap(getResponse -> {
             final TaskResult result = getResponse.getTask();
             if (result.isCompleted()) {
+                logger.debug(
+                    "followRelocationAndRethrottle: task [{}] is completed (error: [{}]), returning empty response",
+                    request.getTargetTaskId(),
+                    result.getErrorAsMap()
+                );
                 listener.onResponse(emptyResponse);
-            } else {  // re-issue rethrottle to relocated task
+            } else {
                 final TaskId currentTaskId = result.getTask().taskId();
+                logger.debug(
+                    "followRelocationAndRethrottle: task [{}] resolved to running task [{}], re-issuing rethrottle",
+                    request.getTargetTaskId(),
+                    currentTaskId
+                );
                 final RethrottleRequest retry = new RethrottleRequest();
                 retry.setTargetTaskId(currentTaskId);
                 retry.setRequestsPerSecond(request.getRequestsPerSecond());
@@ -118,8 +142,10 @@ public class TransportRethrottleAction extends TransportTasksAction<BulkByScroll
             }
         }, e -> {
             if (ExceptionsHelper.unwrap(e, ResourceNotFoundException.class) != null) {
+                logger.debug("followRelocationAndRethrottle: task [{}] not found, returning empty response", request.getTargetTaskId());
                 listener.onResponse(emptyResponse);
             } else {
+                logger.debug("followRelocationAndRethrottle: failed to look up task [{}]", request.getTargetTaskId(), e);
                 listener.onFailure(e);
             }
         }));

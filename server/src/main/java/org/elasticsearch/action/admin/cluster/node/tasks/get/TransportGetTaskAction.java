@@ -104,6 +104,14 @@ public class TransportGetTaskAction extends HandledTransportAction<GetTaskReques
 
     @Override
     protected void doExecute(Task thisTask, GetTaskRequest request, ActionListener<GetTaskResponse> listener) {
+        logger.debug(
+            "doExecute: task [{}], local [{}], waitForCompletion [{}], timeout [{}], followRelocations [{}]",
+            request.getTaskId(),
+            clusterService.localNode().getId().equals(request.getTaskId().getNodeId()),
+            request.getWaitForCompletion(),
+            request.getTimeout(),
+            request.getFollowRelocations()
+        );
         ActionListener<GetTaskResponse> relocationAwareListener = request.getFollowRelocations()
             ? listener.delegateFailureAndWrap((l, response) -> followReindexRelocationIfNeeded(request, response, l))
             : listener;
@@ -135,18 +143,22 @@ public class TransportGetTaskAction extends HandledTransportAction<GetTaskReques
             listener.onFailure(e);
         });
         if (node == null) {
-            // Node is no longer part of the cluster! Try and look the task up from the results index.
+            logger.debug(
+                "runOnNodeWithTaskIfPossible: node [{}] not in cluster for task [{}], falling back to .tasks index",
+                request.getTaskId().getNodeId(),
+                request.getTaskId()
+            );
             getFinishedTaskFromIndex(thisTask, request, finishedTaskListener);
             return;
         }
+        logger.debug("runOnNodeWithTaskIfPossible: forwarding task [{}] to node [{}]", request.getTaskId(), node.getId());
         GetTaskRequest nodeRequest = request.nodeRequest(clusterService.localNode().getId(), thisTask.getId());
         ActionListener<GetTaskResponse> getTaskListener = ActionListener.wrap(listener::onResponse, e -> {
             if (ExceptionsHelper.unwrap(e, ConnectTransportException.class) != null) {
-                // The node is still in the cluster state but disconnected (e.g. shutting down during relocation).
-                // Fall back to the .tasks index where the completed task result should be stored.
                 logger.debug("failed to contact node [{}] for task [{}], falling back to .tasks index", node.getId(), request.getTaskId());
                 getFinishedTaskFromIndex(thisTask, request, finishedTaskListener);
             } else {
+                logger.debug("runOnNodeWithTaskIfPossible: failed for task [{}] on node [{}]", request.getTaskId(), node.getId(), e);
                 listener.onFailure(e);
             }
         });
@@ -176,9 +188,15 @@ public class TransportGetTaskAction extends HandledTransportAction<GetTaskReques
     void getRunningTaskFromNode(Task thisTask, GetTaskRequest request, ActionListener<GetTaskResponse> listener) {
         Task runningTask = taskManager.getTask(request.getTaskId().getId());
         if (runningTask == null) {
-            // Task isn't running, go look in the task index
+            logger.debug("getRunningTaskFromNode: task [{}] not found in TaskManager, falling back to .tasks index", request.getTaskId());
             getFinishedTaskFromIndex(thisTask, request, listener);
         } else {
+            logger.debug(
+                "getRunningTaskFromNode: task [{}] found in TaskManager, waitForCompletion [{}], timeout [{}]",
+                request.getTaskId(),
+                request.getWaitForCompletion(),
+                request.getTimeout()
+            );
             if (projectResolver.supportsMultipleProjects()) {
                 var requestProjectId = projectResolver.getProjectId();
                 assert requestProjectId != null : "project ID cannot be null";
@@ -249,6 +267,7 @@ public class TransportGetTaskAction extends HandledTransportAction<GetTaskReques
         TaskInfo snapshotOfRunningTask,
         ActionListener<GetTaskResponse> listener
     ) {
+        logger.debug("waitedForCompletion: task [{}] completed, fetching result from .tasks index", request.getTaskId());
         getFinishedTaskFromIndex(thisTask, request, listener.delegateResponse((delegatedListener, e) -> {
             /*
              * We couldn't load the task from the task index. Instead of 404 we should use the snapshot we took after it finished. If
@@ -268,6 +287,7 @@ public class TransportGetTaskAction extends HandledTransportAction<GetTaskReques
      * coordinating node if the node is no longer part of the cluster.
      */
     void getFinishedTaskFromIndex(Task thisTask, GetTaskRequest request, ActionListener<GetTaskResponse> listener) {
+        logger.debug("getFinishedTaskFromIndex: looking up task [{}] from .tasks index", request.getTaskId());
         GetRequest get = new GetRequest(TaskResultsService.TASK_INDEX, request.getTaskId().toString());
         get.setParentTask(clusterService.localNode().getId(), thisTask.getId());
 
@@ -289,9 +309,11 @@ public class TransportGetTaskAction extends HandledTransportAction<GetTaskReques
      */
     void onGetFinishedTaskFromIndex(GetResponse response, ActionListener<GetTaskResponse> listener) throws IOException {
         if (false == response.isExists()) {
+            logger.debug("onGetFinishedTaskFromIndex: task [{}] not found in .tasks index", response.getId());
             listener.onFailure(new ResourceNotFoundException("task [{}] isn't running and hasn't stored its results", response.getId()));
             return;
         }
+        logger.debug("onGetFinishedTaskFromIndex: task [{}] found in .tasks index", response.getId());
         if (response.isSourceEmpty()) {
             listener.onFailure(new ElasticsearchException("Stored task status for [{}] didn't contain any source!", response.getId()));
             return;
@@ -329,10 +351,22 @@ public class TransportGetTaskAction extends HandledTransportAction<GetTaskReques
     ) {
         TaskId relocatedTaskId = extractRelocatedReindexTaskId(response.getTask());
         if (relocatedTaskId == null) {
+            logger.debug(
+                "followReindexRelocationIfNeeded: task [{}] completed [{}], no relocation to follow",
+                originalRequest.getTaskId(),
+                response.getTask().isCompleted()
+            );
             listener.onResponse(response);
             return;
         }
-        logger.debug("task [{}] was relocated to [{}], following relocation chain", originalRequest.getTaskId(), relocatedTaskId);
+        logger.debug(
+            "followReindexRelocationIfNeeded: task [{}] was relocated to [{}], issuing follow-up GET "
+                + "with waitForCompletion [{}], timeout [{}]",
+            originalRequest.getTaskId(),
+            relocatedTaskId,
+            originalRequest.getWaitForCompletion(),
+            originalRequest.getTimeout()
+        );
         GetTaskRequest relocatedRequest = new GetTaskRequest().setTaskId(relocatedTaskId)
             .setWaitForCompletion(originalRequest.getWaitForCompletion())
             .setTimeout(originalRequest.getTimeout());
@@ -340,6 +374,12 @@ public class TransportGetTaskAction extends HandledTransportAction<GetTaskReques
         rawClient.admin().cluster().getTask(relocatedRequest, new ActionListener<>() {
             @Override
             public void onResponse(GetTaskResponse relocatedResponse) {
+                logger.debug(
+                    "followReindexRelocationIfNeeded: successfully followed task [{}] to relocated task [{}], completed [{}]",
+                    originalRequest.getTaskId(),
+                    relocatedTaskId,
+                    relocatedResponse.getTask().isCompleted()
+                );
                 listener.onResponse(mergeRelocatedTask(response.getTask(), relocatedResponse));
             }
 
