@@ -31,6 +31,7 @@ import org.elasticsearch.tasks.TaskResultsService;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.NodeRoles;
 import org.elasticsearch.test.XContentTestUtils;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.test.rest.ESRestTestCase;
 import org.elasticsearch.xcontent.ObjectPath;
 import org.junit.BeforeClass;
@@ -62,6 +63,14 @@ import static org.hamcrest.Matchers.nullValue;
  * {@code POST _reindex/{originalTaskId}/_rethrottle} resolves through the relocation
  * chain and applies the new throttle to the relocated task.
  */
+@TestLogging(
+    value = "org.elasticsearch.action.admin.cluster.node.tasks.get.TransportGetTaskAction:DEBUG,"
+        + "org.elasticsearch.reindex.TransportRethrottleAction:DEBUG,"
+        + "org.elasticsearch.reindex.management.TransportGetReindexAction:DEBUG,"
+        + "org.elasticsearch.reindex.LoggingReindexTaskListener:DEBUG,"
+        + "org.elasticsearch.tasks.TaskManager:DEBUG",
+    reason = "Investigating timeout in relocation-following chain (issue #148893)"
+)
 @ESIntegTestCase.ClusterScope(scope = ESIntegTestCase.Scope.TEST, numDataNodes = 0, numClientNodes = 0)
 public class ReindexRethrottleRelocationIT extends ESIntegTestCase {
 
