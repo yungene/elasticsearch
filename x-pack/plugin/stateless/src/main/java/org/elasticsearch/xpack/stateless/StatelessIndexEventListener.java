@@ -11,6 +11,7 @@ import org.apache.lucene.index.SegmentInfos;
 import org.apache.lucene.store.AlreadyClosedException;
 import org.apache.lucene.store.IOContext;
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.action.support.SubscribableListener;
 import org.elasticsearch.action.support.ThreadedActionListener;
 import org.elasticsearch.cluster.metadata.IndexReshardingMetadata;
@@ -328,7 +329,8 @@ class StatelessIndexEventListener implements IndexEventListener {
                 );
                 if (recoveryCommit.hollow() == false) {
                     // We must use a copied instance for warming as the index directory will move forward with new commits
-                    var warmingDirectory = indexDirectory.getBlobStoreCacheDirectory().createNewBlobStoreCacheDirectoryForWarming();
+                    var warmingDirectory = indexDirectory.getBlobStoreCacheDirectory()
+                        .createNewBlobStoreCacheDirectoryForWarming(CachePopulationReason.RECOVERY_WARMING);
                     warmingDirectory.updateMetadata(blobFileRanges, recoveryCommit.getAllFilesSizeInBytes());
 
                     warmingService.warmCacheForShardRecoveryOrUnhollowing(

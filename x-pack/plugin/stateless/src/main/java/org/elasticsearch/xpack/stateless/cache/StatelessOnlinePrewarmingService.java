@@ -12,6 +12,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.util.Supplier;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.search.OnlinePrewarmingService;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.action.support.RefCountingListener;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.settings.Setting;
@@ -243,6 +244,7 @@ public class StatelessOnlinePrewarmingService implements OnlinePrewarmingService
                                 logger.error(() -> format("%s failed to online prewarm cache key %s", indexShard.shardId(), cacheKey), e);
                             }
                         }),
+                        CachePopulationReason.ONLINE_PREWARM,
                         ActionListener.runAfter(refs.acquire().map(b -> null), store::decRef)
                     );
                 }

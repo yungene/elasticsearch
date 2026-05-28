@@ -13,6 +13,7 @@ import org.apache.lucene.util.SetOnce;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.common.ByteRange;
 import org.elasticsearch.blobcache.shared.SharedBlobCacheService;
 import org.elasticsearch.blobcache.shared.SharedBytes;
@@ -674,6 +675,7 @@ public class SharedBlobCacheWarmingServiceTests extends ESTestCase {
                             completionListener) -> {
                             throw new AssertionError("this should not happen, this represents a test failure");
                         },
+                        randomFrom(CachePopulationReason.values()),
                         "_na_"
                     );
                     assertThat((long) read, equalTo(testRange.end() - testRange.start()));
@@ -951,6 +953,7 @@ public class SharedBlobCacheWarmingServiceTests extends ESTestCase {
                         }
                         ActionListener.completeWith(completionListener, () -> null);
                     },
+                    randomFrom(CachePopulationReason.values()),
                     resourceDescription
                 );
                 assertThat(bytesRead, equalTo((long) SharedBytes.PAGE_SIZE));
@@ -1100,6 +1103,7 @@ public class SharedBlobCacheWarmingServiceTests extends ESTestCase {
                     anyLong(),
                     any(),
                     any(),
+                    any(),
                     anyActionListener()
                 );
 
@@ -1160,6 +1164,7 @@ public class SharedBlobCacheWarmingServiceTests extends ESTestCase {
                 eq(0),// Always fully warm up region 0
                 eq(ByteRange.of(0, rangeSize)),
                 anyLong(),
+                any(),
                 any(),
                 any(),
                 anyActionListener()

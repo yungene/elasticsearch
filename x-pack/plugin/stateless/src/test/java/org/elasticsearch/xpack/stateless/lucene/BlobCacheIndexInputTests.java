@@ -17,6 +17,7 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.support.RefCountingListener;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.BlobCacheUtils;
 import org.elasticsearch.blobcache.common.ByteRange;
 import org.elasticsearch.blobcache.common.SparseFileTracker;
@@ -141,7 +142,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                         createBlobFileRanges(primaryTerm, 0L, 0, input.length),
                         BlobCacheMetrics.NOOP,
                         System::currentTimeMillis,
-                        false
+                        false,
+                        randomFrom(CachePopulationReason.values())
                     ),
                     null,
                     input.length,
@@ -242,7 +244,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(termAndGen.primaryTerm(), termAndGen.generation(), 0, input.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 input.length,
@@ -358,7 +361,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(termAndGen.primaryTerm(), termAndGen.generation(), 0, input.length),
                     null,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 input.length,
@@ -427,7 +431,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, 0L, 0, input.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 input.length,
@@ -535,7 +540,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                         createBlobFileRanges(primaryTerm, generation, pos, fileLength),
                         BlobCacheMetrics.NOOP,
                         System::currentTimeMillis,
-                        false
+                        false,
+                        randomFrom(CachePopulationReason.values())
                     ),
                     null,
                     fileLength,
@@ -562,7 +568,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, generation, 0, data.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 data.length,
@@ -754,7 +761,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, 0L, 0, input.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 input.length,
@@ -823,7 +831,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, 0L, 0, input.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 input.length,
@@ -890,7 +899,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, 0L, 0, input.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 input.length,
@@ -947,7 +957,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, 0L, 0, input.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 input.length,
@@ -1004,7 +1015,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, 0L, 0, inputA.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 inputA.length,
@@ -1042,7 +1054,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                         createBlobFileRanges(primaryTerm, 0L, 0, evictInput.length),
                         BlobCacheMetrics.NOOP,
                         System::currentTimeMillis,
-                        false
+                        false,
+                        randomFrom(CachePopulationReason.values())
                     ),
                     null,
                     evictInput.length,
@@ -1096,7 +1109,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                 createBlobFileRanges(primaryTerm, 0L, 0, input.length),
                 metrics,
                 System::currentTimeMillis,
-                false
+                false,
+                randomFrom(CachePopulationReason.values())
             );
 
             // First read: bypass path — exactly 1 bypass, 1 read, 1 miss
@@ -1173,7 +1187,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, 0L, 0, input.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 input.length,
@@ -1237,7 +1252,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, 0L, 0, input.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 input.length,
@@ -1298,7 +1314,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, 0L, 0, input.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 input.length,
@@ -1354,7 +1371,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                     createBlobFileRanges(primaryTerm, 0L, 0, inputA.length),
                     BlobCacheMetrics.NOOP,
                     System::currentTimeMillis,
-                    false
+                    false,
+                    randomFrom(CachePopulationReason.values())
                 ),
                 null,
                 inputA.length,
@@ -1396,7 +1414,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
                         createBlobFileRanges(primaryTerm, 0L, 0, evictInput.length),
                         BlobCacheMetrics.NOOP,
                         System::currentTimeMillis,
-                        false
+                        false,
+                        randomFrom(CachePopulationReason.values())
                     ),
                     null,
                     evictInput.length,
@@ -1434,7 +1453,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
             createBlobFileRanges(primaryTerm, 0L, 0, (int) fileLength),
             BlobCacheMetrics.NOOP,
             System::currentTimeMillis,
-            false
+            false,
+            randomFrom(CachePopulationReason.values())
         );
         final BlobCacheIndexInput indexInput = new BlobCacheIndexInput(
             "test-file",
@@ -1487,7 +1507,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
             createBlobFileRanges(randomNonNegativeLong(), 0L, 0, (int) fileLength),
             metrics,
             System::currentTimeMillis,
-            true
+            true,
+            randomFrom(CachePopulationReason.values())
         );
         final BlobCacheIndexInput indexInput = new BlobCacheIndexInput(
             "test-file",
@@ -1548,7 +1569,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
             createBlobFileRanges(randomNonNegativeLong(), 0L, 0, (int) fileLength),
             metrics,
             System::currentTimeMillis,
-            true
+            true,
+            randomFrom(CachePopulationReason.values())
         );
         final BlobCacheIndexInput indexInput = new BlobCacheIndexInput(
             "test-file",
@@ -1598,7 +1620,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
             createBlobFileRanges(randomNonNegativeLong(), 0L, 0, (int) fileLength),
             metrics,
             System::currentTimeMillis,
-            true
+            true,
+            randomFrom(CachePopulationReason.values())
         );
         final BlobCacheIndexInput indexInput = new BlobCacheIndexInput(
             "test-file",
@@ -1638,7 +1661,8 @@ public class BlobCacheIndexInputTests extends ESIndexInputTestCase {
             createBlobFileRanges(randomNonNegativeLong(), 0L, 0, (int) fileLength),
             metrics,
             System::currentTimeMillis,
-            true
+            true,
+            randomFrom(CachePopulationReason.values())
         );
         final BlobCacheIndexInput indexInput = new BlobCacheIndexInput(
             "test-file",

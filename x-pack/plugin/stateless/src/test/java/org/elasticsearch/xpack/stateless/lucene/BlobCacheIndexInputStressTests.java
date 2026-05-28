@@ -9,6 +9,7 @@ package org.elasticsearch.xpack.stateless.lucene;
 
 import org.apache.lucene.codecs.CodecUtil;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.shared.SharedBlobCacheService;
 import org.elasticsearch.blobcache.shared.SharedBytes;
 import org.elasticsearch.common.lucene.store.ESIndexInputTestCase;
@@ -172,7 +173,8 @@ public class BlobCacheIndexInputStressTests extends ESIndexInputTestCase {
                         createBlobFileRanges(primaryTerm, primaryTerm, offset, checksumAndLength.length),
                         BlobCacheMetrics.NOOP,
                         System::currentTimeMillis,
-                        false
+                        false,
+                        CachePopulationReason.INDEXING_IO
                     ),
                     null,
                     checksumAndLength.length,

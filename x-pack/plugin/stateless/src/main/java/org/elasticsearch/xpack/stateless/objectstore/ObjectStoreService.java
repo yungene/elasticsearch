@@ -16,6 +16,7 @@ import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.action.support.RefCountingListener;
 import org.elasticsearch.action.support.SubscribableListener;
 import org.elasticsearch.blobcache.BlobCacheUtils;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.cluster.ClusterChangedEvent;
 import org.elasticsearch.cluster.ClusterStateApplier;
 import org.elasticsearch.cluster.metadata.ProjectId;
@@ -825,7 +826,7 @@ public class ObjectStoreService extends AbstractLifecycleComponent implements Cl
                 blobTermAndGen
             )
         );
-        var dir = directory.createNewBlobStoreCacheDirectoryForWarming();
+        var dir = directory.createNewBlobStoreCacheDirectoryForWarming(CachePopulationReason.RECOVERY_METADATA);
         dir.updateMetadata(
             Map.of(blobName, new BlobFileRanges(new BlobLocation(new BlobFile(blobName, blobTermAndGen), 0L, maxBlobLength))),
             maxBlobLength

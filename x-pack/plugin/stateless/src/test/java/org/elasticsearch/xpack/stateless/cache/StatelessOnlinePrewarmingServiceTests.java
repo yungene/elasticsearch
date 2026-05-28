@@ -10,6 +10,7 @@ package org.elasticsearch.xpack.stateless.cache;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
 import org.elasticsearch.blobcache.BlobCacheUtils;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.common.ByteRange;
 import org.elasticsearch.blobcache.shared.SharedBlobCacheService;
 import org.elasticsearch.blobcache.shared.SharedBytes;
@@ -321,6 +322,7 @@ public class StatelessOnlinePrewarmingServiceTests extends ESTestCase {
                             long blobLength,
                             RangeMissingHandler writer,
                             Executor fetchExecutor,
+                            CachePopulationReason reason,
                             ActionListener<Boolean> listener
                         ) {
                             listener.onFailure(new IllegalStateException("oh no"));

@@ -10,6 +10,7 @@ package org.elasticsearch.xpack.stateless.cache;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.support.RefCountingListener;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.common.ByteRange;
 import org.elasticsearch.blobcache.shared.SharedBlobCacheService;
 import org.elasticsearch.common.settings.ClusterSettings;
@@ -322,6 +323,7 @@ public class SearchCommitPrefetcher {
                         ),
                         executor,
                         forcePrefetch,
+                        CachePopulationReason.PREFETCH,
                         refCountingListener.acquire().map(populated -> {
                             if (populated) {
                                 var offsetAfterPopulation = maxPrefetchedOffset.accumulateAndGet(

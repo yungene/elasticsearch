@@ -14,6 +14,7 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.BlobCacheUtils;
 import org.elasticsearch.blobcache.common.ByteRange;
 import org.elasticsearch.blobcache.shared.SharedBlobCacheService;
@@ -326,7 +327,8 @@ public class CacheBlobReaderTests extends ESTestCase {
                         new BlobFileRanges(getLastInternalLocation().getValue()),
                         BlobCacheMetrics.NOOP,
                         System::currentTimeMillis,
-                        false
+                        false,
+                        randomFrom(CachePopulationReason.values())
                     ),
                     null,
                     length,
@@ -680,7 +682,8 @@ public class CacheBlobReaderTests extends ESTestCase {
                 new BlobFileRanges(internalLocation.getValue()),
                 BlobCacheMetrics.NOOP,
                 System::currentTimeMillis,
-                false
+                false,
+                randomFrom(CachePopulationReason.values())
             );
             final long availableDataLength = BlobCacheUtils.toPageAlignedSize(vbccSize);
             try (var searchInput = new BlobCacheIndexInput("region", IOContext.DEFAULT, cacheFileReader, null, regionSize, 0)) {

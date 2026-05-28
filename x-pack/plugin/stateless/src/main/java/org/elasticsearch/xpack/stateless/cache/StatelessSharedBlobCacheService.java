@@ -10,6 +10,7 @@ package org.elasticsearch.xpack.stateless.cache;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.RefCountingListener;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.common.ByteRange;
 import org.elasticsearch.blobcache.shared.SharedBlobCacheService;
 import org.elasticsearch.cluster.node.DiscoveryNode;
@@ -83,6 +84,7 @@ public class StatelessSharedBlobCacheService extends SharedBlobCacheService<File
         IntConsumer bytesCopiedConsumer,
         Executor fetchExecutor,
         boolean force,
+        CachePopulationReason reason,
         ActionListener<Void> listener,
         String... threadPools
     ) {
@@ -116,6 +118,7 @@ public class StatelessSharedBlobCacheService extends SharedBlobCacheService<File
                     ),
                     fetchExecutor,
                     force,
+                    reason,
                     listeners.acquire().map(populated -> null)
                 );
             }
@@ -131,6 +134,7 @@ public class StatelessSharedBlobCacheService extends SharedBlobCacheService<File
         IntConsumer bytesCopiedConsumer,
         Executor fetchExecutor,
         boolean force,
+        CachePopulationReason reason,
         ActionListener<Void> listener
     ) {
         fetchRange(
@@ -142,6 +146,7 @@ public class StatelessSharedBlobCacheService extends SharedBlobCacheService<File
             bytesCopiedConsumer,
             fetchExecutor,
             force,
+            reason,
             listener,
             StatelessPlugin.PREWARM_THREAD_POOL,
             StatelessPlugin.FILL_VIRTUAL_BATCHED_COMPOUND_COMMIT_CACHE_THREAD_POOL

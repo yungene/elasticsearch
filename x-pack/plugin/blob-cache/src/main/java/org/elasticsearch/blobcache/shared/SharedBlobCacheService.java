@@ -18,6 +18,7 @@ import org.elasticsearch.action.support.RefCountingListener;
 import org.elasticsearch.action.support.RefCountingRunnable;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
 import org.elasticsearch.blobcache.BlobCacheUtils;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.common.ByteRange;
 import org.elasticsearch.blobcache.common.SparseFileTracker;
 import org.elasticsearch.cluster.node.DiscoveryNode;
@@ -323,7 +324,7 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
     }
 
     private interface Cache<K, T> extends Releasable {
-        CacheEntry<T> get(K cacheKey, long fileLength, int region);
+        CacheEntry<T> get(K cacheKey, long fileLength, int region, CachePopulationReason reason);
 
         /// Returns the entry for the provided `cacheKey` and `region` if it exists and is fully initialized
         /// (i.e. its IO slot has been assigned), or `null` otherwise.
@@ -557,8 +558,8 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
         return regionSize;
     }
 
-    CacheFileRegion<KeyType> get(KeyType cacheKey, long fileLength, int region) {
-        return cache.get(cacheKey, fileLength, region).chunk;
+    CacheFileRegion<KeyType> get(KeyType cacheKey, long fileLength, int region, CachePopulationReason reason) {
+        return cache.get(cacheKey, fileLength, region, reason).chunk;
     }
 
     /**
@@ -586,9 +587,10 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
         final long blobLength,
         final RangeMissingHandler writer,
         final Executor fetchExecutor,
+        final CachePopulationReason reason,
         final ActionListener<Boolean> listener
     ) {
-        fetchRegion(cacheKey, region, blobLength, writer, fetchExecutor, false, listener);
+        fetchRegion(cacheKey, region, blobLength, writer, fetchExecutor, false, reason, listener);
     }
 
     /**
@@ -611,6 +613,7 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
      * @param fetchExecutor an executor to use for reading from the blob store
      * @param force         flag indicating whether the cache should free an occupied region to accommodate the requested
      *                      region when none are free.
+     * @param reason        the reason for populating this cache region
      * @param listener      a listener that is completed with {@code true} if the current thread triggered the fetching of the region, in
      *                      which case the data is available in cache. The listener is completed with {@code false} in every other cases: if
      *                      the region to write is already available in cache, if the region is pending fetching via another thread or if
@@ -623,10 +626,16 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
         final RangeMissingHandler writer,
         final Executor fetchExecutor,
         final boolean force,
+        final CachePopulationReason reason,
         final ActionListener<Boolean> listener
     ) {
         if (force == false && freeRegions.isEmpty()) {
-            var incoming = new CacheFileRegion<>(this, new RegionKey<>(cacheKey, region), computeCacheFileRegionSize(blobLength, region));
+            var incoming = new CacheFileRegion<>(
+                this,
+                new RegionKey<>(cacheKey, region),
+                computeCacheFileRegionSize(blobLength, region),
+                reason
+            );
             if (maybeEvictLeastUsed(incoming) == false) {
                 // no free page available and no old enough unused region to be evicted
                 logger.info("No free regions, skipping loading region [{}]", region);
@@ -640,7 +649,7 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
                 listener.onResponse(false);
                 return;
             }
-            final CacheFileRegion<KeyType> entry = get(cacheKey, blobLength, region);
+            final CacheFileRegion<KeyType> entry = get(cacheKey, blobLength, region, reason);
             entry.populate(regionRange, writer, fetchExecutor, listener);
         } catch (Exception e) {
             listener.onFailure(e);
@@ -674,9 +683,10 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
         final long blobLength,
         final RangeMissingHandler writer,
         final Executor fetchExecutor,
+        final CachePopulationReason reason,
         final ActionListener<Boolean> listener
     ) {
-        fetchRange(cacheKey, region, range, blobLength, writer, fetchExecutor, false, listener);
+        fetchRange(cacheKey, region, range, blobLength, writer, fetchExecutor, false, reason, listener);
     }
 
     /**
@@ -699,6 +709,7 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
      * @param fetchExecutor an executor to use for reading from the blob store
      * @param force         flag indicating whether the cache should free an occupied region to accommodate the requested
      *                      range when none are free.
+     * @param reason        the reason for populating this cache region
      * @param listener      a listener that is completed with {@code true} if the current thread triggered the fetching of the range, in
      *                      which case the data is available in cache. The listener is completed with {@code false} in every other cases: if
      *                      the range to write is already available in cache, if the range is pending fetching via another thread or if
@@ -712,10 +723,16 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
         final RangeMissingHandler writer,
         final Executor fetchExecutor,
         final boolean force,
+        final CachePopulationReason reason,
         final ActionListener<Boolean> listener
     ) {
         if (force == false && freeRegions.isEmpty()) {
-            var incoming = new CacheFileRegion<>(this, new RegionKey<>(cacheKey, region), computeCacheFileRegionSize(blobLength, region));
+            var incoming = new CacheFileRegion<>(
+                this,
+                new RegionKey<>(cacheKey, region),
+                computeCacheFileRegionSize(blobLength, region),
+                reason
+            );
             if (maybeEvictLeastUsed(incoming) == false) {
                 // no free page available and no old enough unused region to be evicted
                 logger.debug("No free regions, skipping loading region [{}]", region);
@@ -729,7 +746,7 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
                 listener.onResponse(false);
                 return;
             }
-            final CacheFileRegion<KeyType> entry = get(cacheKey, blobLength, region);
+            final CacheFileRegion<KeyType> entry = get(cacheKey, blobLength, region, reason);
             entry.populate(
                 regionRange,
                 writerWithOffset(writer, Math.toIntExact(range.start() - getRegionStart(region))),
@@ -791,9 +808,14 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
     }
 
     // used by tests
-    boolean maybeEvictLeastUsed(KeyType cacheKey, long length, int region) {
+    boolean maybeEvictLeastUsed(KeyType cacheKey, long length, int region, CachePopulationReason cachePopulationReason) {
         if (cache instanceof LFUCache lfuCache) {
-            var incoming = new CacheFileRegion<>(this, new RegionKey<>(cacheKey, region), computeCacheFileRegionSize(length, region));
+            var incoming = new CacheFileRegion<>(
+                this,
+                new RegionKey<>(cacheKey, region),
+                computeCacheFileRegionSize(length, region),
+                cachePopulationReason
+            );
             return lfuCache.maybeEvictLeastUsed(incoming);
         }
         return false;
@@ -966,6 +988,7 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
         final SharedBlobCacheService<KeyType> blobCacheService;
 
         final RegionKey<KeyType> regionKey;
+        final CachePopulationReason populationReason;
         final SparseFileTracker tracker;
         // io can be null when not init'ed or after evict/take
         // io does not need volatile access on the read path, since it goes from null to a single value (and then possbily back to null).
@@ -976,9 +999,15 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
         // side effects
         private SharedBytes.IO io = null;
 
-        CacheFileRegion(SharedBlobCacheService<KeyType> blobCacheService, RegionKey<KeyType> regionKey, int regionSize) {
+        CacheFileRegion(
+            SharedBlobCacheService<KeyType> blobCacheService,
+            RegionKey<KeyType> regionKey,
+            int regionSize,
+            CachePopulationReason populationReason
+        ) {
             this.blobCacheService = blobCacheService;
             this.regionKey = regionKey;
+            this.populationReason = populationReason;
             assert regionSize > 0;
             // NOTE we use a constant string for description to avoid consume extra heap space
             tracker = new SparseFileTracker("file", regionSize);
@@ -1575,10 +1604,11 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
             final ByteRange rangeToRead,
             final RangeAvailableHandler reader,
             final RangeMissingHandler writer,
+            final CachePopulationReason reason,
             String resourceDescription
         ) throws Exception {
             final PlainActionFuture<Integer> future = new PlainActionFuture<>();
-            final long absentBytes = populate(rangeToWrite, rangeToRead, reader, writer, resourceDescription, future);
+            final long absentBytes = populate(rangeToWrite, rangeToRead, reader, writer, reason, resourceDescription, future);
             if (future.isDone() == false && absentBytes > 0) {
                 return recordWait(absentBytes, future);
             }
@@ -1604,6 +1634,7 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
             final ByteRange rangeToRead,
             final RangeAvailableHandler reader,
             final RangeMissingHandler writer,
+            final CachePopulationReason reason,
             String resourceDescription,
             ActionListener<Integer> listener
         ) {
@@ -1658,9 +1689,18 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
             final int startRegion = getRegion(rangeToWrite.start());
             final int endRegion = getEndingRegion(rangeToWrite.end());
             if (startRegion == endRegion) {
-                return readSingleRegion(rangeToWrite, rangeToRead, reader, writerInstrumentationDecorator, startRegion, listener);
+                return readSingleRegion(rangeToWrite, rangeToRead, reader, writerInstrumentationDecorator, reason, startRegion, listener);
             }
-            return readMultiRegions(rangeToWrite, rangeToRead, reader, writerInstrumentationDecorator, startRegion, endRegion, listener);
+            return readMultiRegions(
+                rangeToWrite,
+                rangeToRead,
+                reader,
+                writerInstrumentationDecorator,
+                reason,
+                startRegion,
+                endRegion,
+                listener
+            );
         }
 
         private long readSingleRegion(
@@ -1668,12 +1708,13 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
             ByteRange rangeToRead,
             RangeAvailableHandler reader,
             RangeMissingHandler writer,
+            CachePopulationReason reason,
             int region,
             ActionListener<Integer> listener
         ) {
             final CacheFileRegion<KeyType> fileRegion;
             try {
-                fileRegion = get(cacheKey, length, region);
+                fileRegion = get(cacheKey, length, region, reason);
             } catch (Exception e) {
                 assert e instanceof AlreadyClosedException : e;
                 listener.onFailure(e);
@@ -1697,6 +1738,7 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
             ByteRange rangeToRead,
             RangeAvailableHandler reader,
             RangeMissingHandler writer,
+            CachePopulationReason reason,
             int startRegion,
             int endRegion,
             ActionListener<Integer> listener
@@ -1712,7 +1754,7 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
                     }
                     ActionListener<Integer> regionListener = listeners.acquire(i -> bytesRead.updateAndGet(j -> Math.addExact(i, j)));
                     try {
-                        final CacheFileRegion<KeyType> fileRegion = get(cacheKey, length, region);
+                        final CacheFileRegion<KeyType> fileRegion = get(cacheKey, length, region, reason);
                         regions.add(fileRegion);
                         final long regionStart = getRegionStart(region);
                         fileRegion.populateAndRead(
@@ -2049,7 +2091,7 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
         }
 
         @Override
-        public LFUCacheEntry get(KeyType cacheKey, long fileLength, int region) {
+        public LFUCacheEntry get(KeyType cacheKey, long fileLength, int region, CachePopulationReason reason) {
             final var regionKey = new RegionKey<>(cacheKey, region);
             final long now = epoch.get();
             // try to just get from the map on the fast-path to save instantiating the capturing lambda needed on the slow path
@@ -2060,7 +2102,10 @@ public class SharedBlobCacheService<KeyType extends SharedBlobCacheService.KeyBa
                 entry = keyMapping.computeIfAbsent(
                     cacheKey.shardId(),
                     regionKey,
-                    key -> new LFUCacheEntry(new CacheFileRegion<KeyType>(SharedBlobCacheService.this, key, effectiveRegionSize), now)
+                    key -> new LFUCacheEntry(
+                        new CacheFileRegion<KeyType>(SharedBlobCacheService.this, key, effectiveRegionSize, reason),
+                        now
+                    )
                 );
             }
             // checks using volatile, double locking is fine, as long as we assign io last.

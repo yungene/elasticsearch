@@ -10,6 +10,7 @@ package org.elasticsearch.xpack.stateless.lucene;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FilterDirectory;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.CachePopulationSource;
 import org.elasticsearch.common.blobstore.BlobContainer;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
@@ -98,7 +99,7 @@ public class IndexBlobStoreCacheDirectory extends BlobStoreCacheDirectory {
     }
 
     @Override
-    public IndexBlobStoreCacheDirectory createNewBlobStoreCacheDirectoryForWarming() {
+    public IndexBlobStoreCacheDirectory createNewBlobStoreCacheDirectoryForWarming(CachePopulationReason reason) {
         return new IndexBlobStoreCacheDirectory(
             cacheService,
             shardId,
@@ -106,6 +107,11 @@ public class IndexBlobStoreCacheDirectory extends BlobStoreCacheDirectory {
             totalBytesWarmedFromObjectStore,
             blobContainer.get()
         ) {
+            @Override
+            protected CachePopulationReason cachePopulationReason() {
+                return reason;
+            }
+
             @Override
             protected CacheBlobReader getCacheBlobReader(String fileName, BlobFile blobFile) {
                 return createCacheBlobReader(

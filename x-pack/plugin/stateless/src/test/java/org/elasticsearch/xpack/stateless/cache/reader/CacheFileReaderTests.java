@@ -9,6 +9,7 @@ package org.elasticsearch.xpack.stateless.cache.reader;
 
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.shared.SharedBlobCacheService;
 import org.elasticsearch.blobcache.shared.SharedBytes;
 import org.elasticsearch.common.settings.Settings;
@@ -79,7 +80,8 @@ public class CacheFileReaderTests extends ESTestCase {
                 createBlobFileRanges(1L, 0L, 0, blob.length),
                 metrics,
                 System::currentTimeMillis,
-                service.hasSearchRole()
+                service.hasSearchRole(),
+                randomFrom(CachePopulationReason.values())
             );
 
             assertFalse("indexing node tryPrefetch must report false", cacheFileReader.tryPrefetch(0L, blob.length));
@@ -110,7 +112,8 @@ public class CacheFileReaderTests extends ESTestCase {
                 createBlobFileRanges(1L, 0L, 0, blob.length),
                 metrics,
                 System::currentTimeMillis,
-                service.hasSearchRole()
+                service.hasSearchRole(),
+                randomFrom(CachePopulationReason.values())
             );
 
             assertFalse("first call should miss the fast path", cacheFileReader.tryPrefetch(0L, blob.length));
@@ -155,7 +158,8 @@ public class CacheFileReaderTests extends ESTestCase {
                 createBlobFileRanges(1L, 0L, 0, blob.length),
                 metrics,
                 System::currentTimeMillis,
-                service.hasSearchRole()
+                service.hasSearchRole(),
+                randomFrom(CachePopulationReason.values())
             );
 
             assertFalse(cacheFileReader.tryPrefetch(0L, blob.length));
@@ -185,7 +189,8 @@ public class CacheFileReaderTests extends ESTestCase {
                 createBlobFileRanges(1L, 0L, 0, blob.length),
                 metrics,
                 System::currentTimeMillis,
-                service.hasSearchRole()
+                service.hasSearchRole(),
+                randomFrom(CachePopulationReason.values())
             );
 
             long oversizedLength = (long) blob.length * 1024L;
@@ -220,7 +225,8 @@ public class CacheFileReaderTests extends ESTestCase {
                 createBlobFileRanges(1L, 0L, 0, blob.length),
                 metrics,
                 System::currentTimeMillis,
-                service.hasSearchRole()
+                service.hasSearchRole(),
+                randomFrom(CachePopulationReason.values())
             );
 
             long offsetAtOrPastEof = randomBoolean() ? blob.length : blob.length + randomLongBetween(1L, 1024L);
@@ -252,7 +258,8 @@ public class CacheFileReaderTests extends ESTestCase {
                 createBlobFileRanges(1L, 0L, 0, blob.length),
                 metrics,
                 System::currentTimeMillis,
-                service.hasSearchRole()
+                service.hasSearchRole(),
+                randomFrom(CachePopulationReason.values())
             );
 
             long nonPositiveLength = randomBoolean() ? 0L : -randomLongBetween(1L, 1024L);
@@ -284,7 +291,8 @@ public class CacheFileReaderTests extends ESTestCase {
                 createBlobFileRanges(1L, 0L, 0, blob.length),
                 metrics,
                 System::currentTimeMillis,
-                service.hasSearchRole()
+                service.hasSearchRole(),
+                randomFrom(CachePopulationReason.values())
             );
 
             long midFileOffset = randomLongBetween(1L, blob.length - 1);

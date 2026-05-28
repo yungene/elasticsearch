@@ -18,6 +18,7 @@ import org.apache.lucene.store.Lock;
 import org.apache.lucene.store.LockFactory;
 import org.apache.lucene.store.SingleInstanceLockFactory;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.shared.SharedBlobCacheService;
 import org.elasticsearch.common.blobstore.BlobContainer;
 import org.elasticsearch.core.Assertions;
@@ -270,11 +271,19 @@ public abstract class BlobStoreCacheDirectory extends ByteSizeDirectory {
     }
 
     protected IndexInput doOpenInput(String name, IOContext context, BlobFileRanges blobFileRanges) {
-        return doOpenInput(name, context, blobFileRanges, cacheService.getBlobCacheMetrics(), null);
+        return doOpenInput(name, context, blobFileRanges, cacheService.getBlobCacheMetrics(), cachePopulationReason(), null);
     }
 
     protected IndexInput doOpenInput(String name, IOContext context, BlobFileRanges blobFileRanges, BlobCacheMetrics blobCacheMetrics) {
-        return doOpenInput(name, context, blobFileRanges, blobCacheMetrics, null);
+        return doOpenInput(name, context, blobFileRanges, blobCacheMetrics, cachePopulationReason(), null);
+    }
+
+    /**
+     * Returns the default {@link CachePopulationReason} for reads through this directory.
+     * Subclasses can override to provide a more specific reason (e.g. {@code SEARCH}).
+     */
+    protected CachePopulationReason cachePopulationReason() {
+        return CachePopulationReason.INDEXING_IO;
     }
 
     /**
@@ -284,6 +293,7 @@ public abstract class BlobStoreCacheDirectory extends ByteSizeDirectory {
      * @param context the IO context
      * @param blobFileRanges the {@link BlobFileRanges} associated to the file
      * @param blobCacheMetrics the {@link BlobCacheMetrics} to use for tracking cache metrics
+     * @param reason the reason for populating cache regions created by this read
      * @param releasable a {@link Releasable} to be released when the {@link IndexInput} is closed
      * @return an {@link IndexInput}
      */
@@ -292,6 +302,7 @@ public abstract class BlobStoreCacheDirectory extends ByteSizeDirectory {
         IOContext context,
         BlobFileRanges blobFileRanges,
         BlobCacheMetrics blobCacheMetrics,
+        CachePopulationReason reason,
         @Nullable Releasable releasable
     ) {
         var blobFile = blobFileRanges.blobLocation().blobFile();
@@ -301,7 +312,8 @@ public abstract class BlobStoreCacheDirectory extends ByteSizeDirectory {
             blobFileRanges,
             blobCacheMetrics,
             cacheService.getThreadPool().relativeTimeInMillisSupplier(),
-            cacheService.hasSearchRole()
+            cacheService.hasSearchRole(),
+            reason
         );
         return new BlobCacheIndexInput(name, context, reader, releasable, blobFileRanges.fileLength(), blobFileRanges.fileOffset());
     }
@@ -382,7 +394,7 @@ public abstract class BlobStoreCacheDirectory extends ByteSizeDirectory {
      * @return the {@link BlobStoreCacheDirectory} to use for pre-warming, warming or reading BCC purpose.
      * Note: the bytes read using this instance are always added to {@link #totalBytesWarmedFromObjectStore}.
      */
-    public abstract BlobStoreCacheDirectory createNewBlobStoreCacheDirectoryForWarming();
+    public abstract BlobStoreCacheDirectory createNewBlobStoreCacheDirectoryForWarming(CachePopulationReason reason);
 
     private static UnsupportedOperationException unsupportedException() {
         assert false : "this operation is not supported and should have not be called";

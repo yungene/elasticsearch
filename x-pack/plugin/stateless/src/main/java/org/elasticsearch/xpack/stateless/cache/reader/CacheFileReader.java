@@ -13,6 +13,7 @@ import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
 import org.elasticsearch.blobcache.BlobCacheMetrics.PrefetchResult;
 import org.elasticsearch.blobcache.BlobCacheUtils;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.CachePopulationSource;
 import org.elasticsearch.blobcache.common.ByteBufferReference;
 import org.elasticsearch.blobcache.common.ByteRange;
@@ -64,6 +65,7 @@ public class CacheFileReader {
     private final BlobCacheMetrics blobCacheMetrics;
     private final LongSupplier relativeTimeInMillisSupplier;
     private final boolean hasSearchRole;
+    private final CachePopulationReason populationReason;
 
     public CacheFileReader(
         StatelessSharedBlobCacheService.CacheFile cacheFile,
@@ -71,7 +73,8 @@ public class CacheFileReader {
         BlobFileRanges blobFileRanges,
         BlobCacheMetrics blobCacheMetrics,
         LongSupplier relativeTimeInMillisSupplier,
-        boolean hasSearchRole
+        boolean hasSearchRole,
+        CachePopulationReason populationReason
     ) {
         this.cacheFile = Objects.requireNonNull(cacheFile);
         this.cacheBlobReader = Objects.requireNonNull(cacheBlobReader);
@@ -79,6 +82,7 @@ public class CacheFileReader {
         this.blobCacheMetrics = blobCacheMetrics;
         this.relativeTimeInMillisSupplier = relativeTimeInMillisSupplier;
         this.hasSearchRole = hasSearchRole;
+        this.populationReason = Objects.requireNonNull(populationReason);
     }
 
     /**
@@ -91,7 +95,8 @@ public class CacheFileReader {
             blobFileRanges,
             blobCacheMetrics,
             relativeTimeInMillisSupplier,
-            hasSearchRole
+            hasSearchRole,
+            populationReason
         );
     }
 
@@ -146,6 +151,7 @@ public class CacheFileReader {
                     cacheBlobReader.executorName(),
                     StatelessPlugin.FILL_VIRTUAL_BATCHED_COMPOUND_COMMIT_CACHE_THREAD_POOL
                 ),
+                populationReason,
                 "lucene-prefetch:" + cacheFile.getCacheKey().fileName(),
                 ActionListener.wrap(v -> {
                     blobCacheMetrics.recordPrefetch(PrefetchResult.Fetched);
@@ -269,6 +275,7 @@ public class CacheFileReader {
                         StatelessPlugin.SHARD_READ_THREAD_POOL,
                         StatelessPlugin.FILL_VIRTUAL_BATCHED_COMPOUND_COMMIT_CACHE_THREAD_POOL
                     ),
+                    populationReason,
                     resourceDescription
                 );
                 byteBufferReference.finish(bytesRead);

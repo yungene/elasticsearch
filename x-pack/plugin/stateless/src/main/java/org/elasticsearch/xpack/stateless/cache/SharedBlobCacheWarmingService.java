@@ -24,6 +24,7 @@ import org.elasticsearch.action.support.RefCountingRunnable;
 import org.elasticsearch.action.support.SubscribableListener;
 import org.elasticsearch.action.support.ThreadedActionListener;
 import org.elasticsearch.blobcache.BlobCacheUtils;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.common.ByteRange;
 import org.elasticsearch.blobcache.shared.SharedBytes;
 import org.elasticsearch.cluster.ClusterState;
@@ -496,6 +497,7 @@ public class SharedBlobCacheWarmingService {
                             }
                         }),
                     uploadPrewarmFetchExecutor,
+                    CachePopulationReason.UPLOAD_PREWARM,
                     listeners.acquire().map(b -> null)
                 );
             }
@@ -602,7 +604,7 @@ public class SharedBlobCacheWarmingService {
         @Nullable Map<BlobFile, Long> endOffsetsToWarm,
         ActionListener<Void> listener
     ) {
-        warmCache(type, indexShard, commit, directory, endOffsetsToWarm, false, listener);
+        warmCache(type, indexShard, commit, directory, endOffsetsToWarm, false, CachePopulationReason.RECOVERY_WARMING, listener);
     }
 
     public void warmCacheForShardRecoveryOrUnhollowing(
@@ -614,7 +616,7 @@ public class SharedBlobCacheWarmingService {
         boolean preWarmForIdLookup,
         ActionListener<Void> listener
     ) {
-        warmCache(type, indexShard, commit, directory, endOffsetsToWarm, preWarmForIdLookup, listener);
+        warmCache(type, indexShard, commit, directory, endOffsetsToWarm, preWarmForIdLookup, CachePopulationReason.RECOVERY_WARMING, listener);
     }
 
     /**
@@ -644,10 +646,11 @@ public class SharedBlobCacheWarmingService {
                 directory,
                 endOffsetsToWarm,
                 false,
+                CachePopulationReason.RECOVERY_WARMING,
                 searchRecoveryWarmingListener(plan.timeout(), plan.timeoutContext(), indexShard, resumeRecoveryListener)
             );
         } else {
-            warmCache(Type.SEARCH, indexShard, commit, directory, endOffsetsToWarm, false, ActionListener.noop());
+            warmCache(Type.SEARCH, indexShard, commit, directory, endOffsetsToWarm, false, CachePopulationReason.RECOVERY_WARMING, ActionListener.noop());
             resumeRecoveryListener.onResponse(null);
         }
     }
@@ -659,6 +662,7 @@ public class SharedBlobCacheWarmingService {
         BlobStoreCacheDirectory directory,
         @Nullable Map<BlobFile, Long> endOffsetsToWarm,
         boolean preWarmForIdLookup,
+        CachePopulationReason cachePopulationReason,
         ActionListener<Void> listener
     ) {
         ShardId shardId = indexShard.shardId();
@@ -728,6 +732,7 @@ public class SharedBlobCacheWarmingService {
                         commit.commitFiles(),
                         directory,
                         preWarmForIdLookupRequested && prewarmIndexShardForIdLookupsEnabled,
+                        cachePopulationReason,
                         listeners.acquire()
                     )
                 ) {
@@ -968,9 +973,10 @@ public class SharedBlobCacheWarmingService {
             Map<String, BlobLocation> filesToWarm,
             BlobStoreCacheDirectory directory,
             boolean preWarmForIdLookup,
+            CachePopulationReason cachePopulationReason,
             ActionListener<Void> listener
         ) {
-            super(warmingRun, isStoreClosing, directory, listener);
+            super(warmingRun, isStoreClosing, directory, cachePopulationReason, listener);
             this.indexShard = indexShard;
             this.filesToWarm = Collections.unmodifiableMap(filesToWarm);
             this.segmentCount = segmentCount(filesToWarm);
@@ -1193,7 +1199,7 @@ public class SharedBlobCacheWarmingService {
             BlobStoreCacheDirectory directory,
             ActionListener<Void> listener
         ) {
-            super(warmingRun, isStoreClosing, directory, listener);
+            super(warmingRun, isStoreClosing, directory, CachePopulationReason.MERGE_PREWARM, listener);
             this.locationsToWarm = filesToWarm.values();
             this.mergeCancelled = mergeCancelled;
             this.segmentCount = segmentCount;
@@ -1258,7 +1264,7 @@ public class SharedBlobCacheWarmingService {
             BlobStoreCacheDirectory directory,
             ActionListener<Void> listener
         ) {
-            super(warmingRun, isStoreClosing, directory, listener);
+            super(warmingRun, isStoreClosing, directory, CachePopulationReason.OFFLINE_PREWARM, listener);
             this.blobFile = blobFile;
             this.byteRangeToWarm = byteRangeToWarm;
         }
@@ -1288,6 +1294,7 @@ public class SharedBlobCacheWarmingService {
 
         protected final WarmingRun warmingRun;
         protected final BlobStoreCacheDirectory directory;
+        protected final CachePopulationReason reason;
         protected final Supplier<Boolean> isStoreClosing;
         protected final RefCountingListener listeners;
         protected final AtomicLong tasksCount = new AtomicLong(0L);
@@ -1297,11 +1304,13 @@ public class SharedBlobCacheWarmingService {
             WarmingRun warmingRun,
             Supplier<Boolean> isStoreClosing,
             BlobStoreCacheDirectory directory,
+            CachePopulationReason reason,
             ActionListener<Void> listener
         ) {
             this.warmingRun = warmingRun;
             this.isStoreClosing = isStoreClosing;
             this.directory = directory;
+            this.reason = reason;
             this.listeners = new RefCountingListener(metering(logging(listener)));
         }
 
@@ -1383,6 +1392,7 @@ public class SharedBlobCacheWarmingService {
                                 )
                             ),
                             fetchExecutor,
+                            reason,
                             ref.acquire().map(b -> null)
                         );
                     }
@@ -1490,6 +1500,7 @@ public class SharedBlobCacheWarmingService {
                             StatelessPlugin.FILL_VIRTUAL_BATCHED_COMPOUND_COMMIT_CACHE_THREAD_POOL
                         ),
                         fetchExecutor,
+                        reason,
                         l.map(ignored -> null)
                     );
                 });
@@ -1581,6 +1592,7 @@ public class SharedBlobCacheWarmingService {
                     totalBytesCopied::addAndGet,
                     warmByteRangeThrottledTaskRunner.asExecutor(),
                     true,
+                    reason,
                     l
                 );
             }

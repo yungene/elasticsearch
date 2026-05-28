@@ -12,6 +12,7 @@ import org.apache.lucene.store.FilterDirectory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.elasticsearch.blobcache.BlobCacheMetrics;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.common.blobstore.BlobContainer;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.common.util.set.Sets;
@@ -131,12 +132,17 @@ public class SearchDirectory extends BlobStoreCacheDirectory {
     }
 
     @Override
+    protected CachePopulationReason cachePopulationReason() {
+        return CachePopulationReason.SEARCH;
+    }
+
+    @Override
     protected IndexInput doOpenInput(String name, IOContext context, BlobFileRanges blobFileRanges) {
         if (isGenerationalFile(name) == false) {
             return super.doOpenInput(name, context, blobFileRanges, cacheService.getBlobCacheMetrics());
         }
         var releasable = acquireGenerationalFileTermAndGeneration(blobFileRanges.getBatchedCompoundCommitTermAndGeneration(), name);
-        return doOpenInput(name, context, blobFileRanges, cacheService.getBlobCacheMetrics(), releasable);
+        return doOpenInput(name, context, blobFileRanges, cacheService.getBlobCacheMetrics(), cachePopulationReason(), releasable);
     }
 
     /**
@@ -307,11 +313,14 @@ public class SearchDirectory extends BlobStoreCacheDirectory {
     }
 
     @Override
-    public BlobStoreCacheDirectory createNewBlobStoreCacheDirectoryForWarming() {
-        return createNewInstance(blobContainer.get());
+    public BlobStoreCacheDirectory createNewBlobStoreCacheDirectoryForWarming(CachePopulationReason reason) {
+        return createNewInstance(blobContainer.get(), reason);
     }
 
-    private BlobStoreCacheDirectory createNewInstance(@Nullable LongFunction<BlobContainer> blobContainerFunction) {
+    private BlobStoreCacheDirectory createNewInstance(
+        @Nullable LongFunction<BlobContainer> blobContainerFunction,
+        CachePopulationReason reason
+    ) {
         return new BlobStoreCacheDirectory(
             cacheService,
             shardId,
@@ -319,6 +328,11 @@ public class SearchDirectory extends BlobStoreCacheDirectory {
             totalBytesWarmedFromObjectStore,
             blobContainerFunction
         ) {
+            @Override
+            protected CachePopulationReason cachePopulationReason() {
+                return reason;
+            }
+
             @Override
             protected CacheBlobReader getCacheBlobReader(String fileName, BlobFile blobFile) {
                 return SearchDirectory.this.getCacheBlobReader(
@@ -335,8 +349,8 @@ public class SearchDirectory extends BlobStoreCacheDirectory {
             }
 
             @Override
-            public BlobStoreCacheDirectory createNewBlobStoreCacheDirectoryForWarming() {
-                return SearchDirectory.this.createNewInstance(this::getBlobContainer);
+            public BlobStoreCacheDirectory createNewBlobStoreCacheDirectoryForWarming(CachePopulationReason innerReason) {
+                return SearchDirectory.this.createNewInstance(this::getBlobContainer, innerReason);
             }
         };
     }

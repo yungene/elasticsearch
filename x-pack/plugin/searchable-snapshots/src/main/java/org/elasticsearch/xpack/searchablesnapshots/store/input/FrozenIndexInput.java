@@ -13,6 +13,7 @@ import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.blobcache.BlobCacheUtils;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.blobcache.common.ByteBufferReference;
 import org.elasticsearch.blobcache.common.ByteRange;
 import org.elasticsearch.blobcache.shared.SharedBlobCacheService;
@@ -202,6 +203,7 @@ public final class FrozenIndexInput extends MetadataCachingIndexInput implements
                         }
                     }
                 ),
+                CachePopulationReason.SEARCH,
                 fileInfo.physicalName()
             );
             assert bytesRead == length : bytesRead + " vs " + length;

@@ -9,6 +9,7 @@ package org.elasticsearch.xpack.stateless;
 
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.blobcache.CachePopulationReason;
 import org.elasticsearch.cluster.routing.RecoverySource;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.blobstore.BlobPath;
@@ -120,7 +121,12 @@ public class IndexShardCacheWarmer {
                 // Recovery hasn't even started yet, so we need to set the blob container here in a copied prewarming instance. This
                 // instance will also be copied when reading the last BCC and other referenced blobs, so it is OK to use it for warming
                 // purpose once the last BCC is known.
-                var prewarmingDirectory = createNewBlobStoreCacheDirectoryForWarming(store, blobStore, shardBasePath);
+                var prewarmingDirectory = createNewBlobStoreCacheDirectoryForWarming(
+                    store,
+                    blobStore,
+                    shardBasePath,
+                    CachePopulationReason.MERGE_PREWARM
+                );
                 assert (warmingType != Type.UNHOLLOWING);
                 ObjectStoreService.readIndexingShardState(
                     prewarmingDirectory,
@@ -151,7 +157,12 @@ public class IndexShardCacheWarmer {
         try {
             final var blobStore = objectStoreService.getProjectBlobStore(indexShard.shardId());
             final var shardBasePath = objectStoreService.shardBasePath(indexShard.shardId());
-            var prewarmingDirectory = createNewBlobStoreCacheDirectoryForWarming(store, blobStore, shardBasePath);
+            var prewarmingDirectory = createNewBlobStoreCacheDirectoryForWarming(
+                store,
+                blobStore,
+                shardBasePath,
+                CachePopulationReason.MERGE_PREWARM
+            );
             updateMetadataAndWarmCache(indexShard, Type.UNHOLLOWING, state, prewarmingDirectory, false, false);
         } catch (Exception e) {
             logException(indexShard.shardId(), e);
@@ -161,10 +172,11 @@ public class IndexShardCacheWarmer {
     private static IndexBlobStoreCacheDirectory createNewBlobStoreCacheDirectoryForWarming(
         Store store,
         BlobStore blobStore,
-        BlobPath shardBasePath
+        BlobPath shardBasePath,
+        CachePopulationReason reason
     ) {
         var indexDirectory = IndexDirectory.unwrapDirectory(store.directory());
-        var prewarmingDirectory = indexDirectory.getBlobStoreCacheDirectory().createNewBlobStoreCacheDirectoryForWarming();
+        var prewarmingDirectory = indexDirectory.getBlobStoreCacheDirectory().createNewBlobStoreCacheDirectoryForWarming(reason);
         prewarmingDirectory.setBlobContainer(primaryTerm -> blobStore.blobContainer(shardBasePath.add(String.valueOf(primaryTerm))));
         return prewarmingDirectory;
     }
