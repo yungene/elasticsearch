@@ -48,6 +48,7 @@ import org.elasticsearch.telemetry.Measurement;
 import org.elasticsearch.telemetry.TelemetryProvider;
 import org.elasticsearch.telemetry.TestTelemetryPlugin;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.test.hamcrest.ElasticsearchAssertions;
 import org.elasticsearch.test.transport.MockTransportService;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -1129,6 +1130,12 @@ public class VirtualBatchedCompoundCommitsIT extends AbstractStatelessPluginInte
         ensureSearchable(indexName);
     }
 
+    @TestLogging(
+        reason = "investigating race where pressure is not zero after refresh completes",
+        value = "org.elasticsearch.xpack.stateless.commits.GetVirtualBatchedCompoundCommitChunksPressure:TRACE,"
+            + "org.elasticsearch.xpack.stateless.action.TransportGetVirtualBatchedCompoundCommitChunkAction:TRACE,"
+            + "org.elasticsearch.action.support.RetryableAction:DEBUG"
+    )
     public void testVirtualBatchedCompoundCommitChunksPressure() {
         // The test admits a first refresh that requests a 1-page chunk, and halts it mid-way before returning the chunk response.
         // Then, a second refresh comes in, that requests another 1-page chunk. It is rejected two times in a row, and the third retry
@@ -1188,6 +1195,14 @@ public class VirtualBatchedCompoundCommitsIT extends AbstractStatelessPluginInte
             TransportGetVirtualBatchedCompoundCommitChunkAction.NAME + "[p]",
             (handler, request, channel, task) -> {
                 var r = (GetVirtualBatchedCompoundCommitChunkRequest) request;
+                logger.info(
+                    "--> [interceptor] chunk request shard=[{}] offset=[{}] len=[{}] thread=[{}] pressure=[{}]",
+                    r.getShardId(),
+                    r.getOffset(),
+                    r.getLength(),
+                    Thread.currentThread().getName(),
+                    vbccChunksPressure.getCurrentChunksBytes()
+                );
                 if (r.getShardId().equals(index1shardId)) {
                     handler.messageReceived(request, new TransportChannel() {
                         @Override
@@ -1202,21 +1217,51 @@ public class VirtualBatchedCompoundCommitsIT extends AbstractStatelessPluginInte
 
                         @Override
                         public void sendResponse(TransportResponse response) {
+                            logger.info(
+                                "--> [index1] sendResponse(ok) before latches, thread=[{}] pressure=[{}]",
+                                Thread.currentThread().getName(),
+                                vbccChunksPressure.getCurrentChunksBytes()
+                            );
                             chunk1ResponseProduced.countDown();
                             safeAwait(chunk1ToSendResponse);
+                            logger.info(
+                                "--> [index1] latch released, calling channel.sendResponse, thread=[{}] pressure=[{}]",
+                                Thread.currentThread().getName(),
+                                vbccChunksPressure.getCurrentChunksBytes()
+                            );
                             channel.sendResponse(response);
+                            logger.info(
+                                "--> [index1] after channel.sendResponse, thread=[{}] pressure=[{}]",
+                                Thread.currentThread().getName(),
+                                vbccChunksPressure.getCurrentChunksBytes()
+                            );
                             pagesRead.incrementAndGet();
                         }
                     }, task);
                 } else if (r.getShardId().equals(index2shardId)) {
+                    long remainingBefore = chunk2Attempts.getCount();
                     chunk2Attempts.countDown();
+                    logger.info(
+                        "--> [index2] attempt, countBefore=[{}] countAfter=[{}] thread=[{}]",
+                        remainingBefore,
+                        chunk2Attempts.getCount(),
+                        Thread.currentThread().getName()
+                    );
                     if (chunk2Attempts.getCount() == 0) {
-                        // halt the third attempt of the second refresh
+                        logger.info("--> [index2] halting on chunk2ToProcess latch");
                         safeAwait(chunk2ToProcess);
+                        logger.info("--> [index2] chunk2ToProcess latch released, pressure=[{}]", vbccChunksPressure.getCurrentChunksBytes());
                     }
                     handler.messageReceived(request, new TransportChannel() {
                         @Override
                         public void sendResponse(Exception exception) {
+                            logger.info(
+                                "--> [index2] sendResponse(exception) thread=[{}] pressure=[{}] chunk2Count=[{}] ex=[{}]",
+                                Thread.currentThread().getName(),
+                                vbccChunksPressure.getCurrentChunksBytes(),
+                                chunk2Attempts.getCount(),
+                                exception.getMessage()
+                            );
                             assertThat(chunk2Attempts.getCount(), greaterThan(0L));
                             final var rejectedException = ExceptionsHelper.unwrap(exception, EsRejectedExecutionException.class);
                             assertNotNull(rejectedException);
@@ -1237,6 +1282,12 @@ public class VirtualBatchedCompoundCommitsIT extends AbstractStatelessPluginInte
 
                         @Override
                         public void sendResponse(TransportResponse response) {
+                            logger.info(
+                                "--> [index2] sendResponse(ok) thread=[{}] pressure=[{}] chunk2Count=[{}]",
+                                Thread.currentThread().getName(),
+                                vbccChunksPressure.getCurrentChunksBytes(),
+                                chunk2Attempts.getCount()
+                            );
                             assertThat(chunk2Attempts.getCount(), equalTo(0L));
                             channel.sendResponse(response);
                         }
@@ -1248,9 +1299,10 @@ public class VirtualBatchedCompoundCommitsIT extends AbstractStatelessPluginInte
         );
 
         // Refresh first index
+        logger.info("--> triggering refresh for index1");
         var refresh1 = client().admin().indices().prepareRefresh(indexName1).execute();
         safeAwait(chunk1ResponseProduced);
-        logger.info("--> chunk produced for the first refresh");
+        logger.info("--> chunk produced for the first refresh, pressure=[{}]", vbccChunksPressure.getCurrentChunksBytes());
         assertThat(vbccChunksPressure.getCurrentChunksBytes(), equalTo((long) PAGE_SIZE));
 
         logger.info("--> issuing second refresh");
@@ -1258,15 +1310,18 @@ public class VirtualBatchedCompoundCommitsIT extends AbstractStatelessPluginInte
 
         // wait until the third attempt of the second refresh is halted
         safeAwait(chunk2Attempts);
+        logger.info("--> chunk2Attempts latch reached zero, pressure=[{}]", vbccChunksPressure.getCurrentChunksBytes());
 
-        logger.info("--> continuing sending chunk for the first refresh");
+        logger.info("--> releasing chunk1ToSendResponse latch, pressure=[{}]", vbccChunksPressure.getCurrentChunksBytes());
         chunk1ToSendResponse.countDown();
         assertNoFailures(safeGet(refresh1));
+        logger.info("--> refresh1 completed, pressure=[{}] ABOUT TO ASSERT ==0", vbccChunksPressure.getCurrentChunksBytes());
         assertThat(vbccChunksPressure.getCurrentChunksBytes(), equalTo(0L));
 
-        logger.info("--> continuing processing chunk for the second refresh");
+        logger.info("--> releasing chunk2ToProcess latch, pressure=[{}]", vbccChunksPressure.getCurrentChunksBytes());
         chunk2ToProcess.countDown();
         assertNoFailures(safeGet(refresh2));
+        logger.info("--> refresh2 completed, pressure=[{}] ABOUT TO ASSERT ==0", vbccChunksPressure.getCurrentChunksBytes());
         assertThat(vbccChunksPressure.getCurrentChunksBytes(), equalTo(0L));
 
         // Confirm that the pressure metrics were correctly set

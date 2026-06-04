@@ -244,7 +244,18 @@ public class TransportGetVirtualBatchedCompoundCommitChunkAction extends Transpo
             try {
                 // The pressure releasable is got first, so that we do not allocate memory if the pressure outright rejects the chunk size.
                 final int requestLength = request.getLength();
+                logger.trace(
+                    "shard [{}] about to markChunkStarted with [{}] bytes, current pressure=[{}]",
+                    shardId,
+                    requestLength,
+                    vbccChunksPressure.getCurrentChunksBytes()
+                );
                 Releasable finalReleasable = vbccChunksPressure.markChunkStarted(requestLength);
+                logger.trace(
+                    "shard [{}] markChunkStarted succeeded, pressure=[{}]",
+                    shardId,
+                    vbccChunksPressure.getCurrentChunksBytes()
+                );
                 try {
                     // The following allocation may throw a CBE, in which case we release the pressure in the `finally` block.
                     final ReleasableBytesStreamOutput output = new ReleasableBytesStreamOutput(requestLength, bigArrays);
@@ -255,7 +266,19 @@ public class TransportGetVirtualBatchedCompoundCommitChunkAction extends Transpo
                     // Transfer responsibility of releasing the pressure and the allocation to a ReleasableBytesReference for the response.
                     var transfer = new ReleasableBytesReference(output.bytes(), finalReleasable);
                     finalReleasable = null;
+                    logger.trace(
+                        "shard [{}] about to respondAndRelease, pressure=[{}] thread=[{}]",
+                        shardId,
+                        vbccChunksPressure.getCurrentChunksBytes(),
+                        Thread.currentThread().getName()
+                    );
                     ActionListener.respondAndRelease(l, new GetVirtualBatchedCompoundCommitChunkResponse(transfer));
+                    logger.trace(
+                        "shard [{}] respondAndRelease returned, pressure=[{}] thread=[{}]",
+                        shardId,
+                        vbccChunksPressure.getCurrentChunksBytes(),
+                        Thread.currentThread().getName()
+                    );
                 } catch (AlreadyClosedException e) {
                     throw new ShardNotFoundException(shard.shardId(), "Engine already closed", e);
                 } finally {
