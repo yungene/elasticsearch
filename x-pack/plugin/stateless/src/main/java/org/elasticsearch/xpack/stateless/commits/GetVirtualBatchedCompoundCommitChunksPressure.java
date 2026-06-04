@@ -79,6 +79,15 @@ public class GetVirtualBatchedCompoundCommitChunksPressure {
             long bytesWithoutChunk = currentChunksBytes - bytes;
             this.currentChunksBytes.getAndAdd(-bytes);
             this.metricRejections.incrementBy(1);
+            logger.trace(
+                () -> Strings.format(
+                    "rejected chunk request with [%d] bytes (was [%d], limit [%d]) on thread [%s]",
+                    bytes,
+                    bytesWithoutChunk,
+                    chunksBytesLimit,
+                    Thread.currentThread().getName()
+                )
+            );
             throw new EsRejectedExecutionException(
                 "rejected execution of VBCC chunk request ["
                     + "current_chunks_bytes="
@@ -93,12 +102,26 @@ public class GetVirtualBatchedCompoundCommitChunksPressure {
             );
         }
         this.metricCurrentChunksBytes.add(bytes);
-        logger.trace(() -> Strings.format("added chunk request with [%d] bytes", bytes));
+        logger.trace(
+            () -> Strings.format(
+                "added chunk request with [%d] bytes, pressure now [%d], thread [%s]",
+                bytes,
+                currentChunksBytes,
+                Thread.currentThread().getName()
+            )
+        );
         // We assert that the releasable is called only once. If the assertion fails, this means the memory is adjusted twice.
         return Releasables.assertOnce(() -> {
-            this.currentChunksBytes.getAndAdd(-bytes);
+            long after = this.currentChunksBytes.addAndGet(-bytes);
             this.metricCurrentChunksBytes.add(-bytes);
-            logger.trace(() -> Strings.format("removed chunk request with [%d] bytes", bytes));
+            logger.trace(
+                () -> Strings.format(
+                    "removed chunk request with [%d] bytes, pressure now [%d], thread [%s]",
+                    bytes,
+                    after,
+                    Thread.currentThread().getName()
+                )
+            );
         });
     }
 
