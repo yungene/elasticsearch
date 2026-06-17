@@ -510,4 +510,94 @@ public class LiveVersionMapTests extends ESTestCase {
         assertEquals(map.reclaimableRefreshRamBytes(), 0L);
         assertEquals(map.ramBytesUsedForRefresh(), 0L);
     }
+
+    /**
+     * Demonstrates the time-of-check-to-time-of-use (TOCTOU) hazard of gating the archive lookup in
+     * {@link LiveVersionMap#getUnderLock(BytesRef)} on the global unsafe state of the map (Solution B).
+     *
+     * <p>The gate makes {@code getUnderLock} return {@code null} (forcing a Lucene fallback) whenever
+     * {@code current.isUnsafe() || old.isUnsafe() || archive.isUnsafe()}. Those unsafe flags are global to the shard, so a
+     * skipped put for an <em>unrelated</em> document can flip the map to unsafe and make {@code getUnderLock} drop a
+     * perfectly valid archived version for a different, untouched document.
+     *
+     * <p>At the engine level this is a real correctness hazard for stateless realtime GET: {@code getVersionFromMap}
+     * first checks {@code versionMap.isUnsafe()} and only then calls {@code getUnderLock}. If a concurrent indexing op on
+     * another document flips the map to unsafe <em>between</em> those two steps, the engine has already decided not to
+     * refresh and not to bump {@code lastUnsafeSegmentGenerationForGets}, yet {@code getUnderLock} now returns
+     * {@code null}. The realtime GET then resolves against a possibly stale local Lucene searcher and can incorrectly
+     * report the document as not found.
+     *
+     * <p>This test reproduces the LiveVersionMap-level mechanism deterministically by performing the operations in exactly
+     * that TOCTOU order: (1) observe the map is safe and the archive serves the document, (2) flip the map to unsafe via
+     * an unrelated skipped put, (3) observe that the same archive lookup now returns {@code null}.
+     */
+    public void testArchiveUnsafeGateDropsValidEntryAfterConcurrentFlip() throws IOException {
+        final TestArchive archive = new TestArchive();
+        final LiveVersionMap map = new LiveVersionMap(archive);
+
+        final BytesRef id = uid("doc-under-test");
+        final IndexVersionValue version = randomIndexVersionValue();
+
+        // Put the document and move it into the archive via a refresh cycle. After this the map is in unsafe-access mode
+        // (no op needed safe access), but no map or the archive is marked unsafe yet.
+        try (Releasable ignored = map.acquireLock(id)) {
+            map.putIndexUnderLock(id, version);
+        }
+        map.beforeRefresh();
+        map.afterRefresh(true);
+
+        // (1) Time-of-check: the map is safe and the document is served from the archive. This is the state the engine's
+        // getVersionFromMap() observes when it decides NOT to trigger an unsafe-recovery refresh.
+        assertFalse(map.isUnsafe());
+        try (Releasable ignored = map.acquireLock(id)) {
+            assertThat(map.getUnderLock(id), equalTo(version));
+        }
+
+        // (2) A concurrent indexing op for an UNRELATED document is skipped (the map is not in safe-access mode) and marks
+        // the current map unsafe. This models the op landing in the TOCTOU window after the engine's isUnsafe() check.
+        final BytesRef unrelated = uid("unrelated-doc");
+        try (Releasable ignored = map.acquireLock(unrelated)) {
+            map.maybePutIndexUnderLock(unrelated, randomIndexVersionValue());
+        }
+        assertTrue(map.isUnsafe());
+
+        // (3) Time-of-use: the very same archive entry for the untouched document is now dropped, even though it is still
+        // the correct version. Because the engine already committed to the no-refresh path in step (1), this null turns
+        // into an incorrect realtime-GET "not found".
+        try (Releasable ignored = map.acquireLock(id)) {
+            assertThat(map.getUnderLock(id), nullValue());
+        }
+    }
+
+    /**
+     * Minimal in-memory {@link LiveVersionMapArchive} that retains archived entries and reports unsafe once an unsafe old
+     * map has been archived, mirroring the relevant behaviour of the stateless archive for this test.
+     */
+    private static final class TestArchive implements LiveVersionMapArchive {
+        private final Map<BytesRef, VersionValue> archived = new HashMap<>();
+        private boolean unsafe;
+
+        @Override
+        public void afterRefresh(LiveVersionMap.VersionLookup old) {
+            archived.putAll(old.getMap());
+            if (old.isUnsafe()) {
+                unsafe = true;
+            }
+        }
+
+        @Override
+        public VersionValue get(BytesRef uid) {
+            return archived.get(uid);
+        }
+
+        @Override
+        public long getMinDeleteTimestamp() {
+            return Long.MAX_VALUE;
+        }
+
+        @Override
+        public boolean isUnsafe() {
+            return unsafe;
+        }
+    }
 }

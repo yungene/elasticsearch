@@ -306,10 +306,10 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
      * Returns the live version (add or delete) for this uid.
      */
     VersionValue getUnderLock(final BytesRef uid) {
-        return getUnderLock(uid, maps);
+        return getUnderLock(uid, maps, true);
     }
 
-    private VersionValue getUnderLock(final BytesRef uid, Maps currentMaps) {
+    private VersionValue getUnderLock(final BytesRef uid, Maps currentMaps, boolean skipUnsafeArchiveLookup) {
         assert assertKeyedLockHeldByCurrentThread(uid);
         // First try to get the "live" value:
         VersionValue value = currentMaps.current.get(uid);
@@ -329,13 +329,26 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
             return value;
         }
 
+        // If the version map is unsafe an indexing operation may have skipped putting its version into the map (see
+        // maybePutIndexUnderLock), in which case the archive can still hold a stale version for this uid. Serving that stale
+        // value would cause incorrect version-conflict resolution (the bug this guards against). Returning null here forces the
+        // caller to resolve the current version from Lucene instead. We use the captured maps snapshot so the decision is
+        // consistent with the entries we just inspected.
+        if (skipUnsafeArchiveLookup
+            // && false // to test whether original behaviour is correct
+            && (currentMaps.current.isUnsafe() || currentMaps.old.isUnsafe() || archive.isUnsafe())) {
+            return null;
+        }
+
         return archive.get(uid);
     }
 
     VersionValue getVersionForAssert(final BytesRef uid) {
-        VersionValue value = getUnderLock(uid, maps);
+        // The assertion path must not skip the unsafe archive lookup: it relies on a secondary map (unsafeKeysMap) plus the
+        // archive to reason about skipped/unsafe entries, so it always consults the archive regardless of unsafe state.
+        VersionValue value = getUnderLock(uid, maps, false);
         if (value == null) {
-            value = getUnderLock(uid, unsafeKeysMap);
+            value = getUnderLock(uid, unsafeKeysMap, false);
         }
         return value;
     }
