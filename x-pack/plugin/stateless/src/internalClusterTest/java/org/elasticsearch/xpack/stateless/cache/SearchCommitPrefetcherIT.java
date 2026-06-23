@@ -28,6 +28,7 @@ import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.store.Store;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.telemetry.TelemetryProvider;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.test.transport.MockTransportService;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.threadpool.ThreadPoolStats;
@@ -64,6 +65,7 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Queue;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -186,6 +188,10 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
         }
     }
 
+    @TestLogging(
+        value = "org.elasticsearch.xpack.stateless.cache.SearchCommitPrefetcher:DEBUG",
+        reason = "debug which generations/blobs the prefetcher fetches on the first commit notification"
+    )
     public void testSearchNodePrefetchesOnlyLatestGenerationOnFirstCommitNotification() throws Exception {
         // testing that the first commit notification received after the search node started is used as the
         // lower bound of things to prefetch (put another way, we won't download files from commits that were created in previous
@@ -204,7 +210,7 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
         createIndex(indexName, indexSettings(1, 0).put(IndexSettings.INDEX_REFRESH_INTERVAL_SETTING.getKey(), -1).build());
         ensureGreen(indexName);
 
-        var numberOfCommits = randomIntBetween(5, 8);
+        var numberOfCommits = randomIntBetween(15, 25);
         for (int j = 0; j < numberOfCommits; j++) {
             // Index enough documents so the initial read happening during refresh doesn't include the complete Lucene files
             indexDocs(indexName, 10_000);
@@ -232,9 +238,18 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
         final Queue<CheckedRunnable<Exception>> delayedNewCommitNotifications = ConcurrentCollections.newQueue();
         MockTransportService.getInstance(searchNode)
             .addRequestHandlingBehavior(TransportNewCommitNotificationAction.NAME + "[u]", (handler, request, channel, task) -> {
-                if (delayed.get()) {
+                var notification = asInstanceOf(NewCommitNotificationRequest.class, request);
+                boolean isDelayed = delayed.get();
+                // #region agent log
+                debugLog(
+                    "R1+R3",
+                    "SearchCommitPrefetcherIT.java:notification",
+                    "BCC notification received at search node",
+                    Map.of("delayed", isDelayed, "bccGen", notification.getBatchedCompoundCommitGeneration())
+                );
+                // #endregion
+                if (isDelayed) {
                     delayedNewCommitNotifications.add(() -> handler.messageReceived(request, channel, task));
-                    var notification = asInstanceOf(NewCommitNotificationRequest.class, request);
                     if (delayedNewBccGeneration.isDone()) {
                         assertThat(delayedNewBccGeneration.get(), equalTo(notification.getBatchedCompoundCommitGeneration()));
                     } else {
@@ -266,11 +281,57 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
         assertThat(pendingVbcc.getPrimaryTermAndGeneration().generation(), equalTo(lastBccGeneration));
 
         // Capture the metrics
-        var bytesReadFromBlobStore = meterBlobStoreReadsForBCC(searchNode, BatchedCompoundCommit.blobNameFromGeneration(lastBccGeneration));
+        // #region agent log
+        final var perBlobBytesRead = new ConcurrentHashMap<String, AtomicLong>();
+        final var lastBccBlobName = BatchedCompoundCommit.blobNameFromGeneration(lastBccGeneration);
+        var bytesReadFromBlobStore = new AtomicLong();
+        setNodeRepositoryStrategy(searchNode, new StatelessMockRepositoryStrategy() {
+            @Override
+            public InputStream blobContainerReadBlob(
+                CheckedSupplier<InputStream, IOException> originalSupplier,
+                OperationPurpose purpose,
+                String blobName,
+                long position,
+                long length
+            ) throws IOException {
+                return new FilterInputStream(originalSupplier.get()) {
+                    @Override
+                    public int read(byte[] b, int off, int len) throws IOException {
+                        var n = super.read(b, off, len);
+                        if (n > 0) {
+                            perBlobBytesRead.computeIfAbsent(blobName, k -> {
+                                // #region agent log
+                                debugLog(
+                                    "R1+R2+R3",
+                                    "SearchCommitPrefetcherIT.java:firstBlobRead",
+                                    "first read of blob on search node",
+                                    Map.of("blobName", k)
+                                );
+                                // #endregion
+                                return new AtomicLong();
+                            }).addAndGet(n);
+                            if (blobName.equals(lastBccBlobName)) {
+                                bytesReadFromBlobStore.addAndGet(n);
+                            }
+                        }
+                        return n;
+                    }
+                };
+            }
+        });
+        debugLog(
+            "H1+H2+H3",
+            "SearchCommitPrefetcherIT.java:meterInstalled",
+            "per-blob meter installed",
+            Map.of("lastBccGeneration", lastBccGeneration, "lastBccBlobName", lastBccBlobName)
+        );
+        // #endregion
         var beforeNewCommit = bytesReadFromBlobStore.get();
 
         // Wait until all commit notifications have been intercepted before releasing them
         assertBusy(() -> assertThat(delayedNewCommitNotifications.size(), equalTo(pendingVbcc.getPendingCompoundCommits().size())));
+
+        assertThat(searchEngine.getTotalPrefetchedBytes(), is(0L));
 
         // Now we can release the delayed requests and flush, so that prefetcher kicks in
         delayed.set(false);
@@ -281,11 +342,48 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
 
         flush(indexName);
 
+        // #region agent log
+        debugLog(
+            "natural",
+            "SearchCommitPrefetcherIT.java:postFlush",
+            "after flush returned",
+            Map.of(
+                "totalPrefetchedBytes",
+                searchEngine.getTotalPrefetchedBytes(),
+                "lastBccGenBytes",
+                bytesReadFromBlobStore.get(),
+                "perBlob",
+                summarizePerBlob(perBlobBytesRead)
+            )
+        );
+        // #endregion
+
         // wait for the refreshes to complete
         assertNoRunningAndQueueTasks(threadPool, ThreadPool.Names.REFRESH, preIngestTasksRefreshPool);
         assertNoRunningAndQueueTasks(threadPool, prewarmThreadPool, preIngestTasksPrewarmingPool);
 
         var afterFlush = bytesReadFromBlobStore.get();
+        // #region agent log
+        debugLog(
+            "natural",
+            "SearchCommitPrefetcherIT.java:preAssertion",
+            "per-blob breakdown just before assertion",
+            Map.of(
+                "totalPrefetchedBytes",
+                searchEngine.getTotalPrefetchedBytes(),
+                "meterDelta",
+                afterFlush - beforeNewCommit,
+                "discrepancy",
+                searchEngine.getTotalPrefetchedBytes() - (afterFlush - beforeNewCommit),
+                "lastBccGeneration",
+                lastBccGeneration,
+                "lastBccBlobName",
+                lastBccBlobName,
+                "perBlob",
+                summarizePerBlob(perBlobBytesRead)
+            )
+        );
+        // #endregion
         // we should have prefetched the latest commit generation only
         assertBusy(() -> assertThat(searchEngine.getTotalPrefetchedBytes(), is(afterFlush - beforeNewCommit)));
     }
@@ -926,4 +1024,60 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
             assertThat(stats.active() + stats.queue(), is(0));
         });
     }
+
+    // #region agent log
+    private static final java.nio.file.Path DEBUG_LOG_PATH = java.nio.file.Path.of(
+        "/tmp/prefetch-it-fail-1.log"
+    );
+
+    private static String summarizePerBlob(java.util.Map<String, AtomicLong> perBlob) {
+        var sb = new StringBuilder();
+        perBlob.entrySet().stream().sorted(java.util.Map.Entry.comparingByKey()).forEach(e -> {
+            if (sb.length() > 0) sb.append("|");
+            sb.append(e.getKey()).append("=").append(e.getValue().get());
+        });
+        return sb.toString();
+    }
+
+    private static void debugLog(String hypothesisId, String location, String message, java.util.Map<String, Object> data) {
+        try {
+            var sb = new StringBuilder();
+            sb.append("{\"sessionId\":\"4a5933\"");
+            sb.append(",\"timestamp\":").append(System.currentTimeMillis());
+            sb.append(",\"hypothesisId\":\"").append(hypothesisId).append("\"");
+            sb.append(",\"location\":\"").append(location).append("\"");
+            sb.append(",\"message\":\"").append(message.replace("\\", "\\\\").replace("\"", "\\\"")).append("\"");
+            sb.append(",\"data\":{");
+            boolean first = true;
+            for (var e : data.entrySet()) {
+                if (first == false) sb.append(",");
+                first = false;
+                sb.append("\"").append(e.getKey()).append("\":");
+                Object v = e.getValue();
+                if (v == null) {
+                    sb.append("null");
+                } else if (v instanceof Number || v instanceof Boolean) {
+                    sb.append(v);
+                } else {
+                    sb.append("\"").append(String.valueOf(v).replace("\\", "\\\\").replace("\"", "\\\"")).append("\"");
+                }
+            }
+            sb.append("}}\n");
+            String line = sb.toString();
+            System.err.print("[DEBUG-NDJSON] " + line);
+            try {
+                java.nio.file.Files.writeString(
+                    DEBUG_LOG_PATH,
+                    line,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND
+                );
+            } catch (Exception ignoredFs) {
+                // fall back to stderr only (e.g. running on a host without that workspace path, like CI)
+            }
+        } catch (Exception ignored) {
+            System.err.println("[DEBUG-NDJSON-FAIL] " + ignored);
+        }
+    }
+    // #endregion
 }
