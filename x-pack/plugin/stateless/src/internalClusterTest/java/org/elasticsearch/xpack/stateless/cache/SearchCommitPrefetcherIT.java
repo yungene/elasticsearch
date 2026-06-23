@@ -189,8 +189,15 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
     }
 
     @TestLogging(
-        value = "org.elasticsearch.xpack.stateless.cache.SearchCommitPrefetcher:DEBUG",
-        reason = "debug which generations/blobs the prefetcher fetches on the first commit notification"
+        value = "org.elasticsearch.xpack.stateless.cache.SearchCommitPrefetcher:DEBUG,"
+            // Logs every range load with its initiator: prefetcher loads show initiator=SearchCommitPrefetcher, while
+            // engine segment-open reads show initiator=BlobCacheIndexInput resource description (or "lucene-prefetch").
+            // This confirms whether the unaccounted bytes are read by the engine refresh rather than the prefetcher.
+            + "org.elasticsearch.xpack.stateless.cache.reader.SequentialRangeMissingHandler:DEBUG,"
+            // Logs the actual cached-range reads ("reading cached [blob][start-end]") issued by the engine read path.
+            + "org.elasticsearch.xpack.stateless.cache.reader.CacheFileReader:TRACE",
+        reason = "confirm root cause: distinguish prefetcher (stateless_prewarm) reads from engine refresh "
+            + "(stateless_shard_read) reads of the latest BCC blob"
     )
     public void testSearchNodePrefetchesOnlyLatestGenerationOnFirstCommitNotification() throws Exception {
         // testing that the first commit notification received after the search node started is used as the
@@ -283,6 +290,12 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
         // Capture the metrics
         // #region agent log
         final var perBlobBytesRead = new ConcurrentHashMap<String, AtomicLong>();
+        // Attribute reads of the metered (lastBcc) blob to the thread pool that performed them. The prefetcher reads
+        // on the "stateless_prewarm" pool; the engine refresh / segment-open path reads on a different pool. If the
+        // discrepancy is caused by the engine racing ahead and reading from the blob store, those bytes will show up
+        // under a non-prewarm pool here while NOT being counted in getTotalPrefetchedBytes().
+        final var perPoolBytesReadForLastBcc = new ConcurrentHashMap<String, AtomicLong>();
+        final var poolsWithCapturedStack = ConcurrentHashMap.<String>newKeySet();
         final var lastBccBlobName = BatchedCompoundCommit.blobNameFromGeneration(lastBccGeneration);
         var bytesReadFromBlobStore = new AtomicLong();
         setNodeRepositoryStrategy(searchNode, new StatelessMockRepositoryStrategy() {
@@ -312,6 +325,33 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
                             }).addAndGet(n);
                             if (blobName.equals(lastBccBlobName)) {
                                 bytesReadFromBlobStore.addAndGet(n);
+                                // #region agent log
+                                var pool = poolNameOf(Thread.currentThread().getName());
+                                perPoolBytesReadForLastBcc.computeIfAbsent(pool, k -> new AtomicLong()).addAndGet(n);
+                                // Capture one stack trace per reading pool so we can see exactly which code path
+                                // (prefetcher vs engine refresh / segment open) issued the blob-store read.
+                                if (poolsWithCapturedStack.add(pool)) {
+                                    debugLog(
+                                        "C",
+                                        "SearchCommitPrefetcherIT.java:lastBccReadByPool",
+                                        "first read of lastBcc blob by this thread pool",
+                                        Map.of(
+                                            "blobName",
+                                            blobName,
+                                            "pool",
+                                            pool,
+                                            "thread",
+                                            Thread.currentThread().getName(),
+                                            "position",
+                                            position,
+                                            "length",
+                                            length,
+                                            "stack",
+                                            shortStack(Thread.currentThread().getStackTrace())
+                                        )
+                                    );
+                                }
+                                // #endregion
                             }
                         }
                         return n;
@@ -353,7 +393,9 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
                 "lastBccGenBytes",
                 bytesReadFromBlobStore.get(),
                 "perBlob",
-                summarizePerBlob(perBlobBytesRead)
+                summarizePerBlob(perBlobBytesRead),
+                "perPoolForLastBcc",
+                summarizePerBlob(perPoolBytesReadForLastBcc)
             )
         );
         // #endregion
@@ -380,7 +422,9 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
                 "lastBccBlobName",
                 lastBccBlobName,
                 "perBlob",
-                summarizePerBlob(perBlobBytesRead)
+                summarizePerBlob(perBlobBytesRead),
+                "perPoolForLastBcc",
+                summarizePerBlob(perPoolBytesReadForLastBcc)
             )
         );
         // #endregion
@@ -1029,6 +1073,64 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
     private static final java.nio.file.Path DEBUG_LOG_PATH = java.nio.file.Path.of(
         "/tmp/prefetch-it-fail-1.log"
     );
+
+    // Extracts the thread-pool token from an ES thread name such as
+    // "elasticsearch[node_t1][stateless_prewarm][T#1]" -> "stateless_prewarm".
+    // Returns the bracket group immediately before the trailing "[T#..]" worker token, or the raw name if it doesn't match.
+    private static String poolNameOf(String threadName) {
+        if (threadName == null) {
+            return "unknown";
+        }
+        var groups = new ArrayList<String>();
+        int i = 0;
+        while (i < threadName.length()) {
+            int open = threadName.indexOf('[', i);
+            if (open < 0) {
+                break;
+            }
+            int close = threadName.indexOf(']', open + 1);
+            if (close < 0) {
+                break;
+            }
+            groups.add(threadName.substring(open + 1, close));
+            i = close + 1;
+        }
+        if (groups.isEmpty()) {
+            return threadName;
+        }
+        var last = groups.get(groups.size() - 1);
+        // The worker token looks like "T#1"; the pool name is the group before it.
+        if (last.startsWith("T#") && groups.size() >= 2) {
+            return groups.get(groups.size() - 2);
+        }
+        return last;
+    }
+
+    private static String shortStack(StackTraceElement[] stack) {
+        var sb = new StringBuilder();
+        int emitted = 0;
+        for (StackTraceElement e : stack) {
+            var cn = e.getClassName();
+            // Skip JDK / test-harness frames and our own meter frames to keep the trace focused on ES read paths.
+            if (cn.startsWith("java.")
+                || cn.startsWith("jdk.")
+                || cn.startsWith("sun.")
+                || cn.contains("SearchCommitPrefetcherIT")
+                || cn.startsWith("org.junit")
+                || cn.startsWith("com.carrotsearch")) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(" <- ");
+            }
+            int dot = cn.lastIndexOf('.');
+            sb.append(cn.substring(dot + 1)).append('.').append(e.getMethodName()).append(':').append(e.getLineNumber());
+            if (++emitted >= 18) {
+                break;
+            }
+        }
+        return sb.toString();
+    }
 
     private static String summarizePerBlob(java.util.Map<String, AtomicLong> perBlob) {
         var sb = new StringBuilder();
