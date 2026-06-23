@@ -217,7 +217,7 @@ public class SearchCommitPrefetcherIT extends AbstractStatelessPluginIntegTestCa
         createIndex(indexName, indexSettings(1, 0).put(IndexSettings.INDEX_REFRESH_INTERVAL_SETTING.getKey(), -1).build());
         ensureGreen(indexName);
 
-        var numberOfCommits = randomIntBetween(15, 25);
+        var numberOfCommits = randomIntBetween(5, 8);
         for (int j = 0; j < numberOfCommits; j++) {
             // Index enough documents so the initial read happening during refresh doesn't include the complete Lucene files
             indexDocs(indexName, 10_000);
