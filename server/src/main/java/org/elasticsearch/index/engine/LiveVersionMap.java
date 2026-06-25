@@ -202,7 +202,12 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
          */
         Maps invalidateOldMap(LiveVersionMapArchive archive) {
             archive.afterRefresh(old);
-            return new Maps(current, VersionLookup.EMPTY, previousMapsNeededSafeAccess);
+            Maps next = new Maps(current, VersionLookup.EMPTY, previousMapsNeededSafeAccess);
+            // Carry the safe-access request across the refresh boundary. An enforceSafeAccess() that lands between beforeRefresh()
+            // and afterRefresh() sets needsSafeAccess on this (the transition) map; without carrying it, afterRefresh() would
+            // structurally reset it to false and silently drop the request, re-opening the safe->unsafe race that the lock closes.
+            next.needsSafeAccess = this.needsSafeAccess;
+            return next;
         }
 
         void put(BytesRef uid, VersionValue version) {
@@ -235,6 +240,14 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
     // we maintain a second map that only receives the updates that we skip on the actual map (unsafe ops)
     // this map is only maintained if assertions are enabled
     private volatile Maps unsafeKeysMap = new Maps();
+
+    // Serializes the safe-access state transitions on `maps`: the read-modify-write of `needsSafeAccess` performed by
+    // enforceSafeAccess(), beforeRefresh() (buildTransitionMap) and afterRefresh() (invalidateOldMap), plus the reset in clear().
+    // Without this lock a refresh thread and an indexing thread can interleave such that an enforceSafeAccess() request is lost
+    // (the Maps reference is reassigned in between), letting the map transition from safe to unsafe and skip putting a version,
+    // which later surfaces as a spurious version conflict. The indexing hot path (maybePutIndexUnderLock/getUnderLock/etc.) stays
+    // lock-free; it only relies on the volatile `maps` reference for visibility (see Maps#needsSafeAccess).
+    private final Object safeAccessLock = new Object();
 
     /**
      * Bytes consumed for each BytesRef UID:
@@ -282,7 +295,9 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
         // map. While reopen is running, any lookup will first
         // try this new map, then fallback to old, then to the
         // current searcher:
-        maps = maps.buildTransitionMap();
+        synchronized (safeAccessLock) {
+            maps = maps.buildTransitionMap();
+        }
         assert (unsafeKeysMap = unsafeKeysMap.buildTransitionMap()) != null;
         // This is not 100% correct, since concurrent indexing ops can change these counters in between our execution of the previous
         // line and this one, but that should be minor, and the error won't accumulate over time:
@@ -297,7 +312,9 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
         // reopen, and so any concurrent indexing requests can still sneak in a few additions to that current map that are in fact
         // reflected in the previous reader. We don't touch tombstones here: they expire on their own index.gc_deletes timeframe:
 
-        maps = maps.invalidateOldMap(archive);
+        synchronized (safeAccessLock) {
+            maps = maps.invalidateOldMap(archive);
+        }
         assert (unsafeKeysMap = unsafeKeysMap.invalidateOldMapForAssert()) != null;
 
     }
@@ -345,7 +362,14 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
     }
 
     void enforceSafeAccess() {
-        maps.needsSafeAccess = true;
+        // needsSafeAccess changes monotonically from false to true
+        if (maps.needsSafeAccess == false) {
+            // Setting enforceSafeAccess to true must happen atomically with respect to beforeRefresh()/afterRefresh(), which both
+            // reassign `maps`; otherwise the request could be set on a map that is being replaced and thereby lost.
+            synchronized (safeAccessLock) {
+                maps.needsSafeAccess = true;
+            }
+        }
     }
 
     boolean isSafeAccessRequired() {
@@ -463,7 +487,9 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
      * Called when this index is closed.
      */
     synchronized void clear() {
-        maps = new Maps();
+        synchronized (safeAccessLock) {
+            maps = new Maps();
+        }
         tombstones.clear();
         // NOTE: we can't zero this here, because a refresh thread could be calling InternalEngine.pruneDeletedTombstones at the same time,
         // and this will lead to an assert trip. Presumably it's fine if our ramBytesUsedForTombstones is non-zero after clear since the
