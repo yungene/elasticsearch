@@ -1183,10 +1183,6 @@ public class SharedBlobCacheWarmingService {
         }
     }
 
-    public void setShardWarmVolumes(ShardWarmVolumes shardWarmVolumes) {
-        searchRecoveryTimeoutCalculationService.setShardWarmVolumes(shardWarmVolumes);
-    }
-
     public ByteRange byteRangeToWarmForCC(
         ObjectStoreService.StatelessCompoundCommitReferenceWithInternalFiles referencedCC,
         long resolvedCCTimestampMillis

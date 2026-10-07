@@ -883,7 +883,6 @@ public class StatelessPlugin extends Plugin
             warmingRatioProvider,
             searchRecoveryTimeoutCalculationService
         );
-        cacheWarmingService.setShardWarmVolumes(warmVolumes);
         setAndGet(this.sharedBlobCacheWarmingService, cacheWarmingService);
 
         var clusterStateCleanupService = new StatelessClusterStateCleanupService(threadPool, objectStoreService, clusterService);

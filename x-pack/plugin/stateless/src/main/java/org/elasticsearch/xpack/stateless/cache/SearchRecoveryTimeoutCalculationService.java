@@ -33,7 +33,7 @@ public class SearchRecoveryTimeoutCalculationService {
 
     private final StatelessSharedBlobCacheService cacheService;
     private final ThreadPool threadPool;
-    private volatile ShardWarmVolumes shardWarmVolumes;
+    private final ShardWarmVolumes shardWarmVolumes;
     private final LongCounter drainTimeoutHeuristicTotalMetric;
     private final DoubleHistogram drainTimeoutFormulaDeltaMetric;
     private volatile TimeValue searchRecoveryWarmingRelocationWithShutdownTimeout;
@@ -177,10 +177,6 @@ public class SearchRecoveryTimeoutCalculationService {
             }
         }
         return false;
-    }
-
-    void setShardWarmVolumes(ShardWarmVolumes shardWarmVolumes) {
-        this.shardWarmVolumes = shardWarmVolumes;
     }
 
     /// Returns the warming timeout for a shard whose relocation source is shutting down, as the maximum of three
