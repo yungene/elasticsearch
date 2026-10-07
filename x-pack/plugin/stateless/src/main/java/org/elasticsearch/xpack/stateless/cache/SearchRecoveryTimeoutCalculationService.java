@@ -44,7 +44,15 @@ public class SearchRecoveryTimeoutCalculationService {
     private volatile double searchRecoveryWarmingSourceShutdownShareFactor;
     private volatile double searchRecoveryWarmingCacheRatio;
 
-    SearchRecoveryTimeoutCalculationService(
+    public SearchRecoveryTimeoutCalculationService(
+        StatelessSharedBlobCacheService cacheService,
+        ThreadPool threadPool,
+        ClusterSettings clusterSettings
+    ) {
+        this(cacheService, threadPool, clusterSettings, ShardWarmVolumes.NOOP, TelemetryProvider.NOOP);
+    }
+
+    public SearchRecoveryTimeoutCalculationService(
         StatelessSharedBlobCacheService cacheService,
         ThreadPool threadPool,
         ClusterSettings clusterSettings,

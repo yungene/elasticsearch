@@ -151,14 +151,15 @@ import org.elasticsearch.xpack.stateless.allocation.StatelessIndexSettingProvide
 import org.elasticsearch.xpack.stateless.allocation.StatelessShardRelocationOrder;
 import org.elasticsearch.xpack.stateless.allocation.StatelessShardRoutingRoleStrategy;
 import org.elasticsearch.xpack.stateless.allocation.StatelessThrottlingConcurrentRecoveriesAllocationDecider;
+import org.elasticsearch.xpack.stateless.cache.DefaultEvictionPolicyFactory;
 import org.elasticsearch.xpack.stateless.cache.DefaultWarmingRatioProviderFactory;
-import org.elasticsearch.xpack.stateless.cache.PinnedWindowEvictionPolicy;
+import org.elasticsearch.xpack.stateless.cache.EvictionPolicyFactory;
 import org.elasticsearch.xpack.stateless.cache.SearchCommitPrefetcher;
 import org.elasticsearch.xpack.stateless.cache.SearchCommitPrefetcherDynamicSettings;
+import org.elasticsearch.xpack.stateless.cache.SearchRecoveryTimeoutCalculationService;
 import org.elasticsearch.xpack.stateless.cache.ShardWarmVolumes;
 import org.elasticsearch.xpack.stateless.cache.SharedBlobCacheWarmingService;
 import org.elasticsearch.xpack.stateless.cache.StatelessOnlinePrewarmingService;
-import org.elasticsearch.xpack.stateless.cache.StatelessSharedBlobCachePeriodicMetrics;
 import org.elasticsearch.xpack.stateless.cache.StatelessSharedBlobCacheService;
 import org.elasticsearch.xpack.stateless.cache.TimeSlottedAccumulator;
 import org.elasticsearch.xpack.stateless.cache.WarmingRatioProvider;
@@ -585,6 +586,7 @@ public class StatelessPlugin extends Plugin
     private final SetOnce<SearchShardSizeCollectorProvider> searchShardSizeCollectorProvider = new SetOnce<>();
     private final SetOnce<SearchShardSizeCollector> searchShardSizeCollector = new SetOnce<>();
     private final SetOnce<WarmingRatioProviderFactory> warmingRatioProviderFactoryRef = new SetOnce<>();
+    private final SetOnce<EvictionPolicyFactory> evictionPolicyFactoryRef = new SetOnce<>();
     private final SetOnce<AtomicBoolean> isNodeShuttingDown = new SetOnce<>();
 
     private ObjectStoreService getObjectStoreService() {
@@ -865,12 +867,21 @@ public class StatelessPlugin extends Plugin
         } else {
             warmVolumes = ShardWarmVolumes.NOOP;
         }
+        final var searchRecoveryTimeoutCalculationService = new SearchRecoveryTimeoutCalculationService(
+            cacheService,
+            threadPool,
+            clusterService.getClusterSettings(),
+            warmVolumes,
+            services.telemetryProvider()
+        );
+        components.add(searchRecoveryTimeoutCalculationService);
         var cacheWarmingService = createSharedBlobCacheWarmingService(
             cacheService,
             threadPool,
             services.telemetryProvider(),
             clusterService.getClusterSettings(),
-            warmingRatioProvider
+            warmingRatioProvider,
+            searchRecoveryTimeoutCalculationService
         );
         cacheWarmingService.setShardWarmVolumes(warmVolumes);
         setAndGet(this.sharedBlobCacheWarmingService, cacheWarmingService);
@@ -1136,9 +1147,6 @@ public class StatelessPlugin extends Plugin
         components.add(pitRelocationService);
 
         if (hasSearchRole) {
-            components.add(
-                new StatelessSharedBlobCachePeriodicMetrics(cacheService, clusterService.getClusterSettings(), threadPool, meterRegistry)
-            );
             setAndGet(this.prefetchExecutor, new SearchCommitPrefetcher.PrefetchExecutor(threadPool));
             // it is imperative that we do not listen for dynamic settings updates within the prefetcher itself because the prefetcher is
             // created whenever we create the search engine and it might miss the settings that were updated before the node was started.
@@ -1216,6 +1224,9 @@ public class StatelessPlugin extends Plugin
         IndicesService indicesService,
         PluggableDirectoryMetricsHolder<BlobStoreCacheDirectoryMetrics> metricHolder
     ) {
+        final EvictionPolicyFactory evictionPolicyFactory = evictionPolicyFactoryRef.get() != null
+            ? evictionPolicyFactoryRef.get()
+            : new DefaultEvictionPolicyFactory();
         StatelessSharedBlobCacheService statelessSharedBlobCacheService = new StatelessSharedBlobCacheService(
             nodeEnvironment,
             settings,
@@ -1223,7 +1234,8 @@ public class StatelessPlugin extends Plugin
             blobCacheMetrics,
             clusterService,
             indicesService,
-            metricHolder
+            metricHolder,
+            evictionPolicyFactory
         );
         return statelessSharedBlobCacheService;
     }
@@ -1242,9 +1254,17 @@ public class StatelessPlugin extends Plugin
         ThreadPool threadPool,
         TelemetryProvider telemetryProvider,
         ClusterSettings clusterSettings,
-        WarmingRatioProvider warmingRatioProvider
+        WarmingRatioProvider warmingRatioProvider,
+        SearchRecoveryTimeoutCalculationService searchRecoveryTimeoutCalculationService
     ) {
-        return new SharedBlobCacheWarmingService(cacheService, threadPool, telemetryProvider, clusterSettings, warmingRatioProvider);
+        return new SharedBlobCacheWarmingService(
+            cacheService,
+            threadPool,
+            telemetryProvider,
+            clusterSettings,
+            warmingRatioProvider,
+            searchRecoveryTimeoutCalculationService
+        );
     }
 
     protected ReshardIndexService createMetadataReshardIndexService(
@@ -1531,14 +1551,10 @@ public class StatelessPlugin extends Plugin
             ShardsMappingSizeCollector.FIXED_HOLLOW_SHARD_MEMORY_OVERHEAD_SETTING,
             ShardsMappingSizeCollector.HOLLOW_SHARD_SEGMENT_MEMORY_OVERHEAD_SETTING,
             StatelessSharedBlobCacheService.STATELESS_CACHE_BOOST_PREFERENCE_ENABLED_SETTING,
-            StatelessSharedBlobCacheService.STATELESS_CACHE_BOOST_PREFERENCE_TIMESTAMP_BACKFILL_ENABLED_SETTING,
-            StatelessSharedBlobCachePeriodicMetrics.METRICS_INTERVAL_SETTING,
             StatelessReaderHeapBreaker.LIMIT_SETTING,
-            StatelessSharedBlobCacheService.STATELESS_CACHE_BOOST_PREFERENCE_EVICTION_POLICY_SEARCH_SETTING,
             StatelessSharedBlobCacheService.STATELESS_CACHE_EVICT_OBSOLETE_REGIONS_ENABLED_SETTING,
             StatelessSharedBlobCacheService.STATELESS_CACHE_DEMOTE_CLOSED_SHARD_REGIONS_ENABLED_SETTING,
             StatelessSharedBlobCacheService.STATELESS_CACHE_EVICT_DELETED_INDEX_REGIONS_ENABLED_SETTING,
-            PinnedWindowEvictionPolicy.PINNED_WINDOW_DURATION_SETTING,
             StatelessSharedBlobCacheService.STATELESS_CACHE_EVICTION_POLICY_DEGRADATION_THRESHOLD_SETTING,
             StatelessSharedBlobCacheService.STATELESS_CACHE_EVICTION_POLICY_DEGRADATION_DURATION_SETTING,
             StatelessSharedBlobCacheService.STATELESS_CACHE_OBJECT_STORE_PREFETCH_ENABLED_SETTING,
@@ -1927,6 +1943,13 @@ public class StatelessPlugin extends Plugin
             throw new IllegalStateException(WarmingRatioProviderFactory.class + " may not have multiple implementations");
         } else if (warmingRatioProviderFactories.size() == 1) {
             warmingRatioProviderFactoryRef.set(warmingRatioProviderFactories.get(0));
+        }
+
+        var evictionPolicyFactories = loader.loadExtensions(EvictionPolicyFactory.class);
+        if (evictionPolicyFactories.size() > 1) {
+            throw new IllegalStateException(EvictionPolicyFactory.class + " may not have multiple implementations");
+        } else if (evictionPolicyFactories.size() == 1) {
+            evictionPolicyFactoryRef.set(evictionPolicyFactories.getFirst());
         }
     }
 
