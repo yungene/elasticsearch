@@ -12,6 +12,8 @@ import org.apache.lucene.util.RamUsageEstimator;
 import org.elasticsearch.index.engine.LiveVersionMap;
 import org.elasticsearch.index.engine.LiveVersionMapArchive;
 import org.elasticsearch.index.engine.VersionValue;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 
 import java.util.Comparator;
 import java.util.Map;
@@ -21,6 +23,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 public class StatelessLiveVersionMapArchive implements LiveVersionMapArchive {
+
+    private static final Logger logger = LogManager.getLogger(StatelessLiveVersionMapArchive.class);
     // Used to keep track of VersionValues while a refresh on unpromotable shards is pending.
     // Keeps track of the evacuated old map entries and the generation at the time of the refresh
     // to decide which evacuated maps can be removed upon a flush.
@@ -60,6 +64,7 @@ public class StatelessLiveVersionMapArchive implements LiveVersionMapArchive {
     @Override
     public void afterRefresh(LiveVersionMap.VersionLookup old) {
         LiveVersionMap.VersionLookup existing;
+        final long generation;
         synchronized (mutex) {
             if (old.isUnsafe()) {
                 isUnsafe = true;
@@ -75,13 +80,26 @@ public class StatelessLiveVersionMapArchive implements LiveVersionMapArchive {
             }
             minDeleteTimestamp.accumulateAndGet(old.minDeleteTimestamp(), Math::min);
             // we record the generation that these new entries would go into once a flush happens.
-            long generation = preCommitGenerationSupplier.get() + 1;
+            generation = preCommitGenerationSupplier.get() + 1;
             existing = archivePerGeneration.get(generation);
             if (existing == null) {
                 archivePerGeneration.put(generation, old);
+                logger.trace(
+                    "archive reference generation [{}] lookup [{}] unsafe [{}]",
+                    generation,
+                    System.identityHashCode(old),
+                    old.isUnsafe()
+                );
                 return;
             }
         }
+        logger.trace(
+            "archive merge generation [{}] into [{}] from [{}] unsafe [{}]",
+            generation,
+            System.identityHashCode(existing),
+            System.identityHashCode(old),
+            old.isUnsafe()
+        );
         existing.merge(old);
     }
 

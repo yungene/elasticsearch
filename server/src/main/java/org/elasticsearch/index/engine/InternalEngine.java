@@ -1240,7 +1240,9 @@ public class InternalEngine extends Engine {
             }
         }
 
-        return versionMap.getUnderLock(id);
+        final VersionValue versionValue = versionMap.getUnderLock(id);
+        logger.trace("getVersionForWrite id [{}] resolved [{}]", id, versionValue);
+        return versionValue;
     }
 
     private boolean canOptimizeAddDocument(Index index) {
@@ -1439,8 +1441,21 @@ public class InternalEngine extends Engine {
                     // We work around this unexpected behaviour by unconditionally putting the version into the version map when we know we
                     // called enforceSafeAccess.
                     if (plan.enforceSafeAccessCalled && liveVersionMapArchive != LiveVersionMapArchive.NOOP_ARCHIVE) {
+                        logger.trace(
+                            "record id [{}] seqNo [{}] version [{}] via putIndexUnderLock",
+                            index.id(),
+                            index.seqNo(),
+                            plan.versionForIndexing
+                        );
                         versionMap.putIndexUnderLock(index.uid(), version);
                     } else {
+                        logger.trace(
+                            "record id [{}] seqNo [{}] version [{}] via maybePutIndexUnderLock enforceSafeAccessCalled [{}]",
+                            index.id(),
+                            index.seqNo(),
+                            plan.versionForIndexing,
+                            plan.enforceSafeAccessCalled
+                        );
                         versionMap.maybePutIndexUnderLock(index.uid(), version);
                     }
                 }
@@ -1859,8 +1874,21 @@ public class InternalEngine extends Engine {
                     // Even though we have already called enforceSafeAccess() on the version map, we might still be in the unsafe mode
                     // if we had a refresh happen since then. See https://github.com/elastic/elasticsearch/issues/149677
                     if (plan.enforceSafeAccessCalled && liveVersionMapArchive != LiveVersionMapArchive.NOOP_ARCHIVE) {
+                        logger.trace(
+                            "record id [{}] seqNo [{}] version [{}] via putIndexUnderLock",
+                            subBatch.id(i),
+                            assignedSeqNos[i],
+                            plan.versionForIndexing
+                        );
                         versionMap.putIndexUnderLock(subBatch.uid(i), version);
                     } else {
+                        logger.trace(
+                            "record id [{}] seqNo [{}] version [{}] via maybePutIndexUnderLock enforceSafeAccessCalled [{}]",
+                            subBatch.id(i),
+                            assignedSeqNos[i],
+                            plan.versionForIndexing,
+                            plan.enforceSafeAccessCalled
+                        );
                         versionMap.maybePutIndexUnderLock(subBatch.uid(i), version);
                     }
                 }

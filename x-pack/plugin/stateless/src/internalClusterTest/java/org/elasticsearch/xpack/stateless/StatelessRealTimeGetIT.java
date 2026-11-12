@@ -32,6 +32,8 @@ import org.elasticsearch.action.update.UpdateRequest;
 import org.elasticsearch.cluster.routing.allocation.command.MoveAllocationCommand;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.json.JsonXContent;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
@@ -45,6 +47,7 @@ import org.elasticsearch.index.shard.ShardNotFoundException;
 import org.elasticsearch.indices.IndexingMemoryController;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.test.hamcrest.ElasticsearchAssertions;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.test.transport.MockTransportService;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.stateless.action.NewCommitNotificationRequest;
@@ -1081,6 +1084,22 @@ public class StatelessRealTimeGetIT extends AbstractStatelessPluginIntegTestCase
         assertThat(shardGetsOnSearchB.get(), equalTo(0));
     }
 
+    @TestLogging(
+        value = "org.elasticsearch.index.engine.Engine:TRACE,"
+            // Lucene's IndexWriter trace (child loggers of Engine) slows refreshes; keep it off
+            + "org.elasticsearch.index.engine.Engine.BD:INFO,"
+            + "org.elasticsearch.index.engine.Engine.DW:INFO,"
+            + "org.elasticsearch.index.engine.Engine.DWPT:INFO,"
+            + "org.elasticsearch.index.engine.Engine.IFD:INFO,"
+            + "org.elasticsearch.index.engine.Engine.IW:INFO,"
+            + "org.elasticsearch.index.engine.Engine.MP:INFO,"
+            + "org.elasticsearch.index.engine.Engine.MS:INFO,"
+            + "org.elasticsearch.index.engine.Engine.SM:INFO,"
+            + "org.elasticsearch.index.engine.LiveVersionMap:TRACE,"
+            + "org.elasticsearch.xpack.stateless.engine.StatelessLiveVersionMapArchive:TRACE,"
+            + "org.elasticsearch.xpack.stateless.StatelessRealTimeGetIT:INFO",
+        reason = "reconstruct the refresh and version-map sequence around a lost update"
+    )
     public void testNoConflictsOrLostUpdatesDuringRefreshes() throws Exception {
         // LiveVersionMap could leave safe access mode between an update's enforceSafeAccess() and its put. This caused a bug where an
         // update could succeed without putting the version into the version map. The next update then either hit a version conflict,
@@ -1099,7 +1118,23 @@ public class StatelessRealTimeGetIT extends AbstractStatelessPluginIntegTestCase
         ensureStableCluster(3);
 
         String indexName = randomIdentifier();
-        createIndex(indexName, indexSettings(1, 1).put(IndexSettings.INDEX_REFRESH_INTERVAL_SETTING.getKey(), -1).build());
+        // One new field per update is how a lost update shows up. Declare them all here so the loop does not
+        // publish a cluster-state mapping update on every write. The CI failure lost f3, so the race is per update.
+        // 50 matches the old run length. Raising this to 200 made a 20-iteration round take ~15 min instead of ~4 min,
+        // with the same number of updates per minute, so a larger count does not buy a higher hit rate.
+        final int updates = 50;
+        XContentBuilder mapping = JsonXContent.contentBuilder().startObject();
+        mapping.field("dynamic", "strict");
+        mapping.startObject("properties");
+        mapping.startObject("f_init").field("type", "integer").endObject();
+        for (int i = 0; i < updates; i++) {
+            mapping.startObject("f" + i).field("type", "integer").endObject();
+        }
+        mapping.endObject().endObject();
+        assertAcked(
+            prepareCreate(indexName).setSettings(indexSettings(1, 1).put(IndexSettings.INDEX_REFRESH_INTERVAL_SETTING.getKey(), -1))
+                .setMapping(mapping)
+        );
         ensureGreen(indexName);
 
         final var indicesService = internalCluster().getInstance(IndicesService.class, indexNodeA);
@@ -1127,8 +1162,7 @@ public class StatelessRealTimeGetIT extends AbstractStatelessPluginIntegTestCase
         }, "RefreshThread");
         refreshThread.start();
 
-        // 30 is usually enough to hit the bug. But the bug is fixed, so we don't unnecessarily try more.
-        final int updates = 30;
+        // updates is fixed above so the mapping can list every field before the first write.
         final List<Integer> acked = new ArrayList<>();
         final List<String> failures = new ArrayList<>();
         try {
@@ -1137,6 +1171,8 @@ public class StatelessRealTimeGetIT extends AbstractStatelessPluginIntegTestCase
                 if (response.hasFailures()) {
                     failures.add("update " + i + ": " + response.buildFailureMessage());
                 } else {
+                    DocWriteResponse written = response.getItems()[0].getResponse();
+                    logger.info("acked update [{}] seqNo [{}] version [{}]", i, written.getSeqNo(), written.getVersion());
                     acked.add(i);
                 }
             }

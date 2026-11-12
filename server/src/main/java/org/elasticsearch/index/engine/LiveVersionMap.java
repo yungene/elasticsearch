@@ -16,6 +16,8 @@ import org.apache.lucene.util.RamUsageEstimator;
 import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.common.util.concurrent.KeyedLock;
 import org.elasticsearch.core.Releasable;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -24,6 +26,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** Maps _uid value to its version information. */
 public final class LiveVersionMap implements ReferenceManager.RefreshListener, Accountable {
+
+    private static final Logger logger = LogManager.getLogger(LiveVersionMap.class);
 
     private final KeyedLock<BytesRef> keyedLock = new KeyedLock<>();
 
@@ -207,6 +211,12 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
 
         void put(BytesRef uid, VersionValue version) {
             current.put(uid, version);
+            logger.trace(
+                "version map put seqNo [{}] maps [{}] lookup [{}]",
+                version.seqNo,
+                System.identityHashCode(this),
+                System.identityHashCode(current)
+            );
         }
 
         void remove(BytesRef uid, DeleteVersionValue deleted) {
@@ -387,6 +397,12 @@ public final class LiveVersionMap implements ReferenceManager.RefreshListener, A
             // Not this should not hurt performance because the tombstone is small (or empty) when unsafe is relevant.
             removeTombstoneUnderLock(uid);
             maps.current.markAsUnsafe();
+            logger.trace(
+                "version map skip seqNo [{}] maps [{}] lookup [{}]",
+                version.seqNo,
+                System.identityHashCode(maps),
+                System.identityHashCode(maps.current)
+            );
             assert putAssertionMap(uid, version);
         }
     }
